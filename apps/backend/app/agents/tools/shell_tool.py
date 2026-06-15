@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -29,16 +28,6 @@ from app.services.runtime.runtime_execution import (
 MAX_OUTPUT_BYTES = 16_384  # 16KB，参考 Codex CLI
 DEFAULT_TIMEOUT = 60
 MAX_TIMEOUT = 300  # 5分钟
-
-
-def _resolve_bash_path() -> str | None:
-    """Windows 上查找 Git Bash，排除 WSL bash。"""
-    if os.name != "nt":
-        return "bash"
-    which_bash = shutil.which("bash")
-    if which_bash and "System32" not in which_bash and "system32" not in which_bash:
-        return which_bash
-    return None
 
 
 def _build_shell_exec_env() -> dict[str, str] | None:
@@ -83,6 +72,9 @@ _DANGEROUS_PATTERNS = [
     r"(?:\\x[0-9a-fA-F]{2}){4,}",  # \x 十六进制编码序列（4+连续）
     r"(?:\\u[0-9a-fA-F]{4}){2,}",  # \u Unicode 编码序列（2+连续）
     r"\b(?:eval|exec)\s+.*(?:\\x|base64\s+-d|base64\s+--decode)",  # eval $(echo ...|base64 -d) 绕过
+    # === 凭证泄漏防护 ===
+    r"\$\{(?:API_KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)\}",  # ${VAR} 凭证变量引用
+    r"\b(?:curl|wget)\b.*(?:\$|\$\{)(?:API_KEY|TOKEN|SECRET|PASSWORD|AUTH|CREDENTIAL)",  # curl/wget 引用凭证变量
 ]
 
 # Windows 危险命令模式
@@ -216,6 +208,10 @@ class Shell(AiasysTool):
     """
 
     name: str = "Shell"
+    risk_level: str = "high"
+    effect_scope: str = "workspace"
+    side_effect: bool = True
+    dangerous: bool = True
     description: str = f"""在当前工作区执行单次 Shell 命令，同步等待完成并返回结果。
 
 适用场景：
@@ -278,30 +274,16 @@ class Shell(AiasysTool):
                 plan=plan,
             )
 
-        bash_path = _resolve_bash_path() if os.name == "nt" else None
-
         try:
-            if bash_path:
-                # Windows: 使用 Git Bash 执行，避免 cmd.exe 不支持 POSIX 命令
-                proc = await asyncio.create_subprocess_exec(
-                    bash_path,
-                    "-c",
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.DEVNULL,  # 立即关闭 stdin
-                    cwd=str(cwd),
-                    env=env,
-                )
-            else:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    stdin=asyncio.subprocess.DEVNULL,  # 立即关闭 stdin
-                    cwd=str(cwd),
-                    env=env,
-                )
+            proc = await _create_shell_process_with_interpreter(
+                command,
+                params.interpreter,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,  # 立即关闭 stdin
+                cwd=str(cwd),
+                env=env,
+            )
         except Exception as e:
             return ToolResult(content=f"启动进程失败: {e}", is_error=True)
 

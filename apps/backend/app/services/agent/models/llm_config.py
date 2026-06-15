@@ -19,6 +19,11 @@ class LoopControl(BaseModel):
         description="压缩时保留的最近 user/assistant 消息条数",
         ge=0,
     )
+    max_preserved_tokens: int = Field(
+        default=20000,
+        description="压缩时保留的最近消息总 token 上限（与 max_preserved_messages 同时生效）",
+        ge=0,
+    )
     max_summary_tokens: int = Field(
         default=2000,
         description="LLM 生成摘要时的最大输出 token 数",
@@ -28,6 +33,25 @@ class LoopControl(BaseModel):
         default=1000,
         description="保留窗口内 tool 消息超过此长度则截断（0 表示不截断）",
         ge=0,
+    )
+    keep_tool_context_turns: int = Field(
+        default=2,
+        description="保留最近 N 轮 user/assistant 轮次内的完整 tool 结果，更旧的 tool 结果在 pre-turn 阶段被清零",
+        ge=0,
+    )
+    enable_pre_turn_clearing: bool = Field(
+        default=True,
+        description="是否开启每次 LLM 调用前的 tool 结果清零（Tier 1 零成本压缩）",
+    )
+    enable_compaction_verification: bool = Field(
+        default=False,
+        description="是否在 LLM 摘要后运行轻量级验证 probe",
+    )
+    effective_context_window_percent: float = Field(
+        default=95.0,
+        description="有效上下文窗口百分比，为系统提示、工具 schema 和模型输出留余量",
+        ge=50.0,
+        le=100.0,
     )
 
 

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from app.services.agent.models.llm_config import AiasysLlmConfig, LoopControl
 from app.services.agent.runtime_backends.aiasys.session import AiasysRuntimeSession
 from app.services.agent.runtime_backends.aiasys.tool_registry import ToolRegistry
 from app.services.agent.runtime_backends.aiasys.tools.task_tool import (
@@ -17,7 +18,6 @@ from app.services.agent.runtime_backends.aiasys.tools.task_tool import (
     _find_subagent_manifest,
 )
 from app.services.agent.runtime_backends.base import AgentRuntimeEvent, RuntimeSessionCreateSpec
-from app.services.agent.models.llm_config import AiasysLlmConfig, LoopControl
 
 
 class FakeLlmClient:
@@ -48,6 +48,25 @@ def _make_spec(**kwargs) -> RuntimeSessionCreateSpec:
     }
     defaults.update(kwargs)
     return RuntimeSessionCreateSpec(**defaults)
+
+
+def _create_session_metadata(
+    workspace: Path,
+    user_id: str,
+    session_id: str,
+    enabled_expert_role_ids: list[str] | None,
+) -> None:
+    """在临时工作区下创建会话 metadata.json。"""
+    session_dir = workspace / user_id / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "session_id": session_id,
+        "enabled_expert_role_ids": enabled_expert_role_ids,
+    }
+    (session_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 class TestForkTurns:
@@ -221,6 +240,30 @@ class TestToolContextPropagation:
         assert "parent_registry" in ctx
         assert ctx["parent_registry"] is registry
 
+    @patch.object(AiasysRuntimeSession, "_load_agent_config")
+    def test_tool_context_includes_authorization_mode(self, mock_load_config):
+        """_tool_context() 应该包含 authorization_mode 和 yolo，供子 Agent 继承。"""
+        mock_load_config.return_value = {}
+        spec = _make_spec(authorization_mode="smart", yolo=False)
+        registry = ToolRegistry()
+        session = AiasysRuntimeSession(spec, FakeLlmClient(), registry)
+
+        ctx = session._tool_context()
+        assert ctx["authorization_mode"] == "smart"
+        assert ctx["yolo"] is False
+
+    @patch.object(AiasysRuntimeSession, "_load_agent_config")
+    def test_tool_context_inherits_yolo_for_backwards_compat(self, mock_load_config):
+        """父会话 yolo=True 时，tool_context 应正确传递 yolo 标记。"""
+        mock_load_config.return_value = {}
+        spec = _make_spec(authorization_mode="smart", yolo=True)
+        registry = ToolRegistry()
+        session = AiasysRuntimeSession(spec, FakeLlmClient(), registry)
+
+        ctx = session._tool_context()
+        assert ctx["authorization_mode"] == "smart"
+        assert ctx["yolo"] is True
+
 
 def test_find_subagent_manifest_supports_materialized_toml(tmp_path: Path) -> None:
     toml_path = tmp_path / "worker.toml"
@@ -377,6 +420,196 @@ class TestTaskToolRuntimeEnablement:
         assert results[-1].is_error is False
         assert mock_backend.create_session.called
 
+    @pytest.mark.asyncio
+    async def test_fallback_rejects_expert_disabled_by_session_metadata(
+        self,
+        temp_workspace,
+    ):
+        """会话 metadata 显式排除某专家后，TaskTool fallback 应拒绝派发。"""
+        from app.services.agent.subagent_catalog import (
+            save_subagent,
+            save_subagent_visibility_policy,
+        )
+
+        save_subagent(
+            user_id="u1",
+            name="session_disabled_worker",
+            manifest={
+                "name": "session_disabled_worker",
+                "description": "策略启用但被会话禁用",
+                "system_prompt": "worker",
+            },
+            scope="workspace",
+            workspace_id="u1",
+        )
+        save_subagent_visibility_policy(
+            user_id="u1",
+            role_id="session_disabled_worker",
+            scope="workspace",
+            workspace_id="u1",
+            host_selectable=True,
+            default_enabled=True,
+        )
+
+        # 会话只启用其他专家，未包含 session_disabled_worker
+        _create_session_metadata(
+            workspace=temp_workspace,
+            user_id="u1",
+            session_id="s1",
+            enabled_expert_role_ids=["other_expert"],
+        )
+
+        results = []
+        async for item in TaskTool().invoke_stream(
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "workspace": temp_workspace,
+                "session_root": temp_workspace,
+                "agent_config": {"subagents": {}},
+                "llm_config": MagicMock(),
+                "messages": [],
+                "parent_registry": ToolRegistry(),
+            },
+            subagent_name="session_disabled_worker",
+            prompt="run",
+        ):
+            results.append(item)
+
+        assert results
+        assert results[-1].is_error is True
+        assert "未启用到我的默认或当前工作区" in results[-1].content
+
+    @pytest.mark.asyncio
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.SubAgentStorage")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._materialize_subagent_toml")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.AiasysRuntimeBackend")
+    async def test_fallback_allows_expert_enabled_by_session_metadata(
+        self,
+        mock_backend_cls,
+        mock_materialize,
+        mock_storage_cls,
+        temp_workspace,
+    ):
+        """会话 metadata 显式包含某专家后，TaskTool fallback 应允许派发。"""
+        from app.services.agent.subagent_catalog import (
+            save_subagent,
+            save_subagent_visibility_policy,
+        )
+
+        save_subagent(
+            user_id="u1",
+            name="session_enabled_worker",
+            manifest={
+                "name": "session_enabled_worker",
+                "description": "策略启用且会话启用",
+                "system_prompt": "worker",
+            },
+            scope="workspace",
+            workspace_id="u1",
+        )
+        save_subagent_visibility_policy(
+            user_id="u1",
+            role_id="session_enabled_worker",
+            scope="workspace",
+            workspace_id="u1",
+            host_selectable=True,
+            default_enabled=True,
+        )
+
+        _create_session_metadata(
+            workspace=temp_workspace,
+            user_id="u1",
+            session_id="s1",
+            enabled_expert_role_ids=["session_enabled_worker"],
+        )
+
+        mock_materialize.return_value = Path("/tmp/fake.toml")
+        mock_storage = MagicMock()
+        mock_storage.append_context_message = AsyncMock()
+        mock_storage.append_wire_agent_runtime_event = AsyncMock()
+        mock_storage.update_status = Mock()
+        mock_storage_cls.return_value = mock_storage
+        mock_storage.subagent_dir = Path("/fake")
+        mock_session = AsyncMock()
+        mock_session.prompt = MagicMock(return_value=async_gen([]))
+        mock_backend = MagicMock()
+        mock_backend.create_session = AsyncMock(return_value=mock_session)
+        mock_backend_cls.return_value = mock_backend
+
+        results = []
+        async for item in TaskTool().invoke_stream(
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "workspace": temp_workspace,
+                "session_root": temp_workspace,
+                "agent_config": {"subagents": {}},
+                "llm_config": MagicMock(),
+                "messages": [],
+                "parent_registry": ToolRegistry(),
+            },
+            subagent_name="session_enabled_worker",
+            prompt="run",
+        ):
+            results.append(item)
+
+        assert results
+        assert results[-1].is_error is False
+        assert mock_backend.create_session.called
+
+    @pytest.mark.asyncio
+    @patch("app.services.agent.subagent_catalog.load_subagent_for_runtime")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.SubAgentStorage")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._materialize_subagent_toml")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.AiasysRuntimeBackend")
+    async def test_task_tool_defaults_subagent_name_to_coder(
+        self,
+        mock_backend_cls,
+        mock_materialize,
+        mock_storage_cls,
+        mock_load_runtime,
+        temp_workspace,
+    ):
+        """省略 subagent_name 时，TaskTool 应默认使用 coder。"""
+        mock_load_runtime.return_value = {
+            "name": "coder",
+            "system_prompt": "You are a coder",
+        }
+        mock_materialize.return_value = Path("/tmp/fake.toml")
+        mock_storage = MagicMock()
+        mock_storage.append_context_message = AsyncMock()
+        mock_storage.append_wire_agent_runtime_event = AsyncMock()
+        mock_storage.update_status = Mock()
+        mock_storage_cls.return_value = mock_storage
+        mock_storage.subagent_dir = Path("/fake")
+        mock_session = AsyncMock()
+        mock_session.prompt = MagicMock(return_value=async_gen([]))
+        mock_backend = MagicMock()
+        mock_backend.create_session = AsyncMock(return_value=mock_session)
+        mock_backend_cls.return_value = mock_backend
+
+        results = []
+        async for item in TaskTool().invoke_stream(
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "workspace": temp_workspace,
+                "session_root": temp_workspace,
+                "agent_config": {"subagents": {}},
+                "llm_config": MagicMock(),
+                "messages": [],
+                "parent_registry": ToolRegistry(),
+            },
+            prompt="run without specifying subagent_name",
+        ):
+            results.append(item)
+
+        assert results
+        assert results[-1].is_error is False
+        mock_load_runtime.assert_called_once()
+        assert mock_load_runtime.call_args.kwargs.get("name") == "coder"
+
 
 class TestSubagentWorkspaceSharing:
     """测试子 Agent 共享 Host workspace。"""
@@ -438,6 +671,116 @@ class TestSubagentWorkspaceSharing:
         spec = call_args.kwargs.get("spec") or call_args[0][0]
         # work_dir 应该是 WorkspacePath(session_root)
         assert str(spec.work_dir) == str(host_session_root)
+
+
+class TestSubagentAuthorizationInheritance:
+    """测试子 Agent 继承父会话授权模式。"""
+
+    @pytest.mark.asyncio
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.SubAgentStorage")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._materialize_subagent_toml")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._find_subagent_manifest")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.AiasysRuntimeBackend")
+    async def test_subagent_inherits_authorization_mode_and_yolo(
+        self, mock_backend_cls, mock_find, mock_materialize, mock_storage_cls
+    ):
+        """TaskTool 创建子 Agent 时，spec 应继承父会话的 authorization_mode 和 yolo。"""
+        mock_find.return_value = {"name": "coder"}
+        mock_materialize.return_value = Path("/tmp/fake.toml")
+
+        mock_storage = MagicMock()
+        mock_storage.append_context_message = AsyncMock()
+        mock_storage.append_wire_agent_runtime_event = AsyncMock()
+        mock_storage.update_status = Mock()
+        mock_storage_cls.return_value = mock_storage
+        mock_storage.subagent_dir = Path("/fake")
+
+        mock_session = AsyncMock()
+        mock_session.prompt = MagicMock(return_value=async_gen([]))
+        mock_backend = MagicMock()
+        mock_backend.create_session = AsyncMock(return_value=mock_session)
+        mock_backend_cls.return_value = mock_backend
+
+        tool = AgentTool()
+        ctx = {
+            "user_id": "u1",
+            "session_id": "s1",
+            "workspace": Path("/host"),
+            "session_root": Path("/host"),
+            "authorization_mode": "smart",
+            "yolo": False,
+            "agent_config": {
+                "subagents": {
+                    "coder": {
+                        "description": "",
+                        "agent_manifest": {"name": "coder"},
+                    }
+                }
+            },
+            "llm_config": MagicMock(),
+            "messages": [],
+            "parent_registry": ToolRegistry(),
+        }
+
+        async for _ in tool.invoke_stream(ctx, subagent_name="coder", prompt="test"):
+            pass
+
+        spec = mock_backend.create_session.call_args.kwargs.get("spec") or mock_backend.create_session.call_args[0][0]
+        assert spec.authorization_mode == "smart"
+        assert spec.yolo is False
+
+    @pytest.mark.asyncio
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.SubAgentStorage")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._materialize_subagent_toml")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool._find_subagent_manifest")
+    @patch("app.services.agent.runtime_backends.aiasys.tools.task_tool.AiasysRuntimeBackend")
+    async def test_subagent_inherits_yolo_full_auto(
+        self, mock_backend_cls, mock_find, mock_materialize, mock_storage_cls
+    ):
+        """父会话 yolo=True 时，子 Agent 也应继承 yolo=True（等价于 full_auto）。"""
+        mock_find.return_value = {"name": "coder"}
+        mock_materialize.return_value = Path("/tmp/fake.toml")
+
+        mock_storage = MagicMock()
+        mock_storage.append_context_message = AsyncMock()
+        mock_storage.append_wire_agent_runtime_event = AsyncMock()
+        mock_storage.update_status = Mock()
+        mock_storage_cls.return_value = mock_storage
+        mock_storage.subagent_dir = Path("/fake")
+
+        mock_session = AsyncMock()
+        mock_session.prompt = MagicMock(return_value=async_gen([]))
+        mock_backend = MagicMock()
+        mock_backend.create_session = AsyncMock(return_value=mock_session)
+        mock_backend_cls.return_value = mock_backend
+
+        tool = AgentTool()
+        ctx = {
+            "user_id": "u1",
+            "session_id": "s1",
+            "workspace": Path("/host"),
+            "session_root": Path("/host"),
+            "authorization_mode": "smart",
+            "yolo": True,
+            "agent_config": {
+                "subagents": {
+                    "coder": {
+                        "description": "",
+                        "agent_manifest": {"name": "coder"},
+                    }
+                }
+            },
+            "llm_config": MagicMock(),
+            "messages": [],
+            "parent_registry": ToolRegistry(),
+        }
+
+        async for _ in tool.invoke_stream(ctx, subagent_name="coder", prompt="test"):
+            pass
+
+        spec = mock_backend.create_session.call_args.kwargs.get("spec") or mock_backend.create_session.call_args[0][0]
+        assert spec.authorization_mode == "smart"
+        assert spec.yolo is True
 
 
 class TestSubagentNestingProhibition:
@@ -737,7 +1080,6 @@ class TestToolPolicyInheritance:
     def test_allowlist_uses_only_manifest_tools(self):
         """allowlist 策略只使用 manifest 中显式声明的 tools。"""
         from app.services.agent.runtime_backends.aiasys.backend import _iter_tool_paths
-        from app.services.agent.runtime_backends.base import RuntimeSessionCreateSpec
 
         manifest = {"tools": ["app.agents.tools.read_tool:ReadFile"]}
         spec = _make_spec(tool_policy="allowlist")
@@ -750,7 +1092,6 @@ class TestToolPolicyInheritance:
     def test_denylist_excludes_specified_tools(self):
         """denylist 策略继承所有工具但排除 exclude_tools。"""
         from app.services.agent.runtime_backends.aiasys.backend import _iter_tool_paths
-        from app.services.agent.runtime_backends.base import RuntimeSessionCreateSpec
 
         manifest = {
             "tools": [],

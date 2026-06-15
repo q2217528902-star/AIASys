@@ -135,8 +135,41 @@ class SessionMixin:
             write_runtime_config_state,
         )
 
-        work_dir = get_work_dir(user_id, session_id)
-        workspace_path = Path(str(work_dir))
+        # 获取会话的 sandbox_mode（如果会话已创建）
+        session_metadata = self._session_manager.get_session(session_id, user_id)
+
+        # 解析会话所属工作区；若会话绑定到工作区，runtime 工作目录应落在工作区根目录，
+        # 保证文件工具、运行时环境、知识图谱等都在工作区命名空间内操作。
+        workspace_id_for_session: str | None = None
+        try:
+            workspace_id_for_session = (
+                getattr(session_metadata, "workspace_id", None)
+                if session_metadata is not None
+                else None
+            )
+            if not workspace_id_for_session:
+                from app.services.workspace_registry import get_workspace_registry_service
+
+                workspace_id_for_session = (
+                    get_workspace_registry_service().find_workspace_id_by_session_id(
+                        user_id,
+                        session_id,
+                    )
+                )
+        except Exception:
+            logger.debug("解析会话所属工作区失败，继续使用会话目录: session=%s", session_id, exc_info=True)
+
+        if workspace_id_for_session:
+            from app.services.workspace_registry import get_workspace_registry_service
+
+            workspace_path = get_workspace_registry_service()._get_workspace_dir(
+                user_id, workspace_id_for_session
+            )
+            work_dir = WorkspacePath(str(workspace_path))
+        else:
+            work_dir = get_work_dir(user_id, session_id)
+            workspace_path = Path(str(work_dir))
+
         ensure_workspace_layout(workspace_path)
         session_key = f"{user_id}/{session_id}"
 
@@ -148,8 +181,6 @@ class SessionMixin:
 
         resolved_env_id = current_env_id.get()
 
-        # 获取会话的 sandbox_mode（如果会话已创建）
-        session_metadata = self._session_manager.get_session(session_id, user_id)
         # 优先使用传入的参数（用于新会话），否则使用会话元数据中的值
         if sandbox_mode is None:
             sandbox_mode = session_metadata.sandbox_mode if session_metadata else None
@@ -316,6 +347,12 @@ class SessionMixin:
                 runtime_session_id = _extract_runtime_session_id(existing_session)
                 if not runtime_session_id:
                     raise ValueError("runtime session 缺少 session_id")
+                # 复用时刷新上下文 token 计数，避免显示过期的启发式估算
+                refresh_fn = getattr(
+                    existing_session, "refresh_context_tokens_from_metadata", None
+                )
+                if callable(refresh_fn):
+                    refresh_fn()
                 logger.debug(f"复用已有 Session: {session_id}")
                 return existing_session
             except Exception:
@@ -351,6 +388,13 @@ class SessionMixin:
         except Exception:
             logger.debug("读取 memory 开关失败，默认启用", exc_info=True)
 
+        # 读取会话级授权模式配置（默认 full_auto 保持现有行为，可通过 session_metadata 覆盖）
+        authorization_mode = (
+            session_metadata.authorization_mode
+            if session_metadata is not None and session_metadata.authorization_mode
+            else "full_auto"
+        )
+
         session = await runtime_backend.create_session(
             RuntimeSessionCreateSpec(
                 work_dir=work_dir,
@@ -359,7 +403,8 @@ class SessionMixin:
                 config=config,
                 agent_file=dynamic_agent_path,
                 skills_dir=skills_dir,
-                yolo=True,
+                yolo=(authorization_mode == "full_auto"),
+                authorization_mode=authorization_mode,
                 mcp_configs=mcp_configs,
                 collaboration_policy=collaboration_policy_payload,
                 memory_enabled=memory_enabled,
@@ -515,7 +560,7 @@ class SessionMixin:
             logger.error(f"加载 LLM 动态配置失败: {e}")
 
         # 动态配置为空（启动同步可能失败），返回空 Config 让 runtime 报明确错误。
-        logger.error("LLM 动态配置为空，请检查 config.json 和启动日志")
+        logger.error("LLM 动态配置为空，请检查 config.toml 和启动日志")
         return AiasysLlmConfig(
             default_model="",
             default_thinking=False,

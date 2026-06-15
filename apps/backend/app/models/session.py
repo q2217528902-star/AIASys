@@ -393,6 +393,10 @@ class SessionMetadata(BaseModel):
         default_factory=SessionCollaborationPolicy,
         description="当前会话协作节点运行策略",
     )
+    authorization_mode: Optional[str] = Field(
+        default=None,
+        description="能力授权模式: manual/smart/auto/full_auto；None 表示继承工作区/全局默认",
+    )
 
     # 项目协作相关字段（新命名体系）
     # 会话可见性控制
@@ -431,6 +435,8 @@ class SessionMetadata(BaseModel):
         default_factory=SessionPlanState,
         description="当前会话计划模式状态",
     )
+    # 当前上下文占用的 token 数（精确值），与 budget 独立，避免 budget 关闭后丢失。
+    context_tokens: int = Field(default=0, description="最近一次 LLM 调用时的精确 prompt token 数")
     budget: Optional[SessionBudget] = Field(default=None, description="当前会话的独立预算控制")
 
     @model_validator(mode="after")

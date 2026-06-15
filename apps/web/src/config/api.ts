@@ -206,6 +206,9 @@ export const API_ENDPOINTS = {
   // Workspaces
   WORKSPACES_LIST: "/api/workspaces",
   WORKSPACES_CREATE: "/api/workspaces",
+  WORKSPACES_IMPORT_FOLDER_PREVIEW: "/api/workspaces/import-folder-preview",
+  WORKSPACES_IMPORT_FOLDER_UPLOAD: "/api/workspaces/import-folder-upload",
+  WORKSPACES_IMPORT_FOLDER_STREAM: "/api/workspaces/import-folder-stream",
   WORKSPACE_DETAIL: (workspaceId: string) =>
     `/api/workspaces/${encodeURIComponent(workspaceId)}`,
   WORKSPACE_OVERVIEW: (workspaceId: string) =>
@@ -246,6 +249,20 @@ export const API_ENDPOINTS = {
     `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/${encodeURIComponent(envId)}/packages`,
   WORKSPACE_RUNTIME_ENVIRONMENT_ACTIVE: (workspaceId: string) =>
     `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/active`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_INSTALL: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/install`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_USE: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/use`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_DEFAULT: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/default`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_CURRENT: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/current`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_UNINSTALL: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/uninstall`,
+  WORKSPACE_RUNTIME_ENVIRONMENT_NODE_REMOTE: (workspaceId: string) =>
+    `/api/workspaces/${encodeURIComponent(workspaceId)}/runtime-environments/node/remote`,
   WORKSPACE_CONTAINER_RESOURCES: (workspaceId: string) =>
     `/api/workspaces/${encodeURIComponent(workspaceId)}/container-resources`,
   WORKSPACE_CONTAINER_RESOURCE: (workspaceId: string, containerId: string) =>
@@ -444,6 +461,7 @@ export const API_ENDPOINTS = {
   STORAGE_SETTINGS_MIGRATION: "/api/system/storage-settings/migration",
   STORAGE_SETTINGS_MIGRATION_PREVIEW: "/api/system/storage-settings/migration/preview",
   STORAGE_SETTINGS_MIGRATION_START: "/api/system/storage-settings/migration/start",
+  UV_MIRROR_CONFIG: "/api/system/uv/mirror-config",
 
   // Knowledge Base 知识库
   KNOWLEDGE_BASES: "/api/knowledge/bases",

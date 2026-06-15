@@ -5,6 +5,8 @@ import { useSessionMCPManager } from "@/hooks/useSessionMCPManager";
 import { useSkills } from "@/hooks/useSkills";
 import type { AskUserRequest, AskUserValue } from "@/types/askUser";
 import { askUserBridge } from "@/lib/askUserBridge";
+import { eventBus } from "@/lib/eventBus";
+import { resolveCapabilityConfirmation } from "@/lib/api/capabilityConfirmation";
 import { useCodeExecutor } from "./useCodeExecutor";
 import type { SessionDeletionOptions } from "./useCodeExecutor/executorTypes";
 import { useWorkspaceOverlayState } from "./useWorkspaceOverlayState";
@@ -101,11 +103,13 @@ export function useWorkspacePageController({
     thinkingEffort,
   });
 
+  const { updateSessionChatItems } = executor;
+
   const handleAskUserRequest = useCallback(
     (request: AskUserRequest, requestSessionId: string) => {
       showAskUser(request, requestSessionId);
       // 将 AskUser 请求插入聊天流，以内联卡片形式展示
-      executor.updateSessionChatItems(requestSessionId, (prev) => {
+      updateSessionChatItems(requestSessionId, (prev) => {
         // 避免重复插入相同 request_id 的项
         if (prev.some((item) => item.type === "ask_user" && item.id === request.request_id)) {
           return prev;
@@ -122,7 +126,7 @@ export function useWorkspacePageController({
         ];
       });
     },
-    [showAskUser, executor],
+    [showAskUser, updateSessionChatItems],
   );
 
   // 同步 ref 为最新回调（useInsertionEffect 在 DOM mutation 前同步执行，无竞态窗口）
@@ -155,7 +159,7 @@ export function useWorkspacePageController({
     handleAskUserResponseRef.current = (requestId, approved, _value, responseSessionId) => {
       const targetSessionId = responseSessionId || sessionId || undefined;
       if (!targetSessionId) return;
-      executor.updateSessionChatItems(targetSessionId, (prev) =>
+      updateSessionChatItems(targetSessionId, (prev) =>
         prev.map((item) =>
           item.type === "ask_user" && item.id === requestId
             ? { ...item, status: approved ? "approved" : "rejected" }
@@ -163,17 +167,74 @@ export function useWorkspacePageController({
         )
       );
     };
-  }, [executor, executor.updateSessionChatItems, sessionId]);
+  }, [updateSessionChatItems, sessionId]);
+
+  // Capability Confirmation 审批响应处理
+  useEffect(() => {
+    const handleApprove = async (data: unknown) => {
+      const payload = data as {
+        sessionId: string;
+        toolCallId: string;
+        scope: "once" | "session";
+      };
+      try {
+        await resolveCapabilityConfirmation(
+          userId,
+          payload.sessionId,
+          payload.toolCallId,
+          { approved: true, scope: payload.scope }
+        );
+        updateSessionChatItems(payload.sessionId, (prev) =>
+          prev.map((item) =>
+            item.type === "capability_confirmation" && item.id === payload.toolCallId
+              ? { ...item, status: "approved" as const }
+              : item
+          )
+        );
+      } catch (_e) {
+        // 失败时保持 pending，用户可重试
+      }
+    };
+
+    const handleReject = async (data: unknown) => {
+      const payload = data as {
+        sessionId: string;
+        toolCallId: string;
+        feedback: string;
+      };
+      try {
+        await resolveCapabilityConfirmation(
+          userId,
+          payload.sessionId,
+          payload.toolCallId,
+          { approved: false, feedback: payload.feedback }
+        );
+        updateSessionChatItems(payload.sessionId, (prev) =>
+          prev.map((item) =>
+            item.type === "capability_confirmation" && item.id === payload.toolCallId
+              ? { ...item, status: "rejected" as const }
+              : item
+          )
+        );
+      } catch (_e) {
+        // 失败时保持 pending，用户可重试
+      }
+    };
+
+    eventBus.on("capability:approve", handleApprove);
+    eventBus.on("capability:reject", handleReject);
+    return () => {
+      eventBus.off("capability:approve", handleApprove);
+      eventBus.off("capability:reject", handleReject);
+    };
+  }, [userId, updateSessionChatItems]);
 
   const {
     workspaces,
     isLoadingWorkspaces,
-    isLoadingMore,
-    hasMore,
     currentWorkspaceId,
     currentWorkspace,
     loadWorkspaces,
-    loadMoreWorkspaces,
   } = useTaskWorkspaces({
     currentSessionId: sessionId || undefined,
   });
@@ -218,6 +279,7 @@ export function useWorkspacePageController({
     removeAskUserSession,
     setAskUserActiveSessionId,
     showAskUser,
+    onCompactionEvent: executor.handleCompactionEvent,
   });
   const runtimeControls = useWorkspaceRuntimeControls({
     userId,
@@ -271,12 +333,9 @@ export function useWorkspacePageController({
     executor,
     workspaces,
     isLoadingWorkspaces,
-    isLoadingMore,
-    hasMore,
     currentWorkspaceId,
     currentWorkspace,
     loadWorkspaces,
-    loadMoreWorkspaces,
     sessionLifecycle,
     runtimeControls,
     overlayState,

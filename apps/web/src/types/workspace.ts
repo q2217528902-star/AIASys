@@ -30,6 +30,9 @@ export type NewTaskStage =
   | "idle"
   | "selecting_environment"
   | "preparing_session"
+  | "scanning_folder"
+  | "copying_files"
+  | "import_creating_workspace"
   | "creating_workspace"
   | "binding_environment"
   | "attaching_databases"
@@ -41,6 +44,9 @@ export const NEW_TASK_STAGE_LABELS: Record<NewTaskStage, string> = {
   idle: "",
   selecting_environment: "",
   preparing_session: "正在准备初始对话",
+  scanning_folder: "正在扫描文件夹",
+  copying_files: "正在复制文件",
+  import_creating_workspace: "正在初始化导入工作区",
   creating_workspace: "正在创建工作区",
   binding_environment: "正在绑定运行环境",
   attaching_databases: "正在挂载数据库连接",
@@ -56,6 +62,7 @@ export interface NewTaskLifecycleState {
   isBusy: boolean;
   isError: boolean;
   errorMessage: string | null;
+  progress?: number;
 }
 
 export interface WorkspaceRuntimeSummary {
@@ -65,7 +72,7 @@ export interface WorkspaceRuntimeSummary {
   runtime_summary?: SessionRuntimeSummary | null;
 }
 
-export type WorkspaceRuntimeEnvironmentKind = "uv" | "registered_python";
+export type WorkspaceRuntimeEnvironmentKind = "uv" | "registered_python" | "fnm";
 
 export type WorkspaceRuntimeEnvironmentStatus =
   | "registered"
@@ -101,6 +108,8 @@ export interface WorkspaceRuntimeEnvironment {
   material_path?: string | null;
   python_version?: string | null;
   python_executable?: string | null;
+  node_version?: string | null;
+  npm_version?: string | null;
   package_count: number;
   packages: WorkspaceRuntimeEnvPackage[];
   created_at?: string | null;
@@ -208,6 +217,56 @@ export interface WorkspaceRuntimeEnvInspection {
   env: WorkspaceRuntimeEnvironment;
   registry_path: string;
   material_files: Record<string, boolean>;
+}
+
+// ── Node.js / fnm 类型 ──
+
+export type NodeRuntimeEnvStatus =
+  | "registered"
+  | "ready"
+  | "running"
+  | "stopped"
+  | "missing"
+  | "unavailable"
+  | "error"
+  | string;
+
+export interface NodeRuntimeEnv {
+  env_id: string;
+  kind: "fnm" | "registered_node";
+  display_name: string;
+  status: NodeRuntimeEnvStatus;
+  active: boolean;
+  node_version: string | null;
+  npm_version: string | null;
+  package_count: number;
+  packages: WorkspaceRuntimeEnvPackage[];
+  created_at: string | null;
+  updated_at: string | null;
+  last_error: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface NodeRuntimeEnvRegistry {
+  workspace_id: string;
+  default_env_id?: string | null;
+  active_env_id?: string | null;
+  registry_path: string;
+  fnm_available: boolean;
+  envs: NodeRuntimeEnv[];
+  total: number;
+}
+
+export interface NodeRuntimeEnvActionResponse {
+  workspace_id: string;
+  env?: NodeRuntimeEnv;
+  refresh_required?: boolean;
+  command_result?: WorkspaceRuntimeEnvCommandResult | null;
+}
+
+export interface NodeRuntimeActionResult {
+  workspace_id: string;
+  result: Record<string, unknown>;
 }
 
 export interface WorkspaceOverviewWorkspace {

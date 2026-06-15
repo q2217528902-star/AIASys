@@ -16,12 +16,9 @@ export interface WorkspaceLayoutProps {
   executor: UseCodeExecutorReturn;
   workspaces: TaskWorkspaceSummary[];
   isLoadingWorkspaces: boolean;
-  isLoadingMore?: boolean;
-  hasMore?: boolean;
   currentWorkspaceId?: string;
   currentWorkspace?: TaskWorkspaceSummary;
   loadWorkspaces: () => Promise<unknown>;
-  loadMoreWorkspaces?: () => Promise<void>;
   runtimeControls: RuntimeControlsState;
   sessionLifecycle: UseSessionLifecycleManagerReturn;
   userModels: LLMModelConfig[];
@@ -89,8 +86,6 @@ export interface MainContentProps {
   onForkConversation: (conversationId: string) => void;
   onRenameConversation: (sessionId: string, title: string) => Promise<void>;
   onDeleteConversation?: (sessionId: string) => Promise<void>;
-  onOpenGlobalAutoTask?: () => void;
-  onOpenWorkspaceSettings?: () => void;
   activeTabRequest: {
     tab: WorkspaceSidebarTab;
     key: number;

@@ -17,38 +17,7 @@ permissions:
   contents: write
 
 jobs:
-  create-draft-release:
-    runs-on: ubuntu-latest
-    outputs:
-      tag_name: ${{ steps.resolve_tag.outputs.tag_name }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Resolve release tag
-        id: resolve_tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=$(node -p "require('./apps/desktop/package.json').version")
-            EXISTING=$(gh release list --limit 100 --json tagName --jq ".[].tagName" 2>/dev/null | grep "^v${VERSION}-beta\." | wc -l)
-            N=$((EXISTING + 1))
-            TAG="v${VERSION}-beta.${N}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
-          echo "Release tag: $TAG"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Create draft release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.resolve_tag.outputs.tag_name }}
-          name: "Beta ${{ steps.resolve_tag.outputs.tag_name }}"
-          draft: true
-          prerelease: true
-          generate_release_notes: true
-
   build-desktop:
-    needs: create-draft-release
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +42,21 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: resolve_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION=$(node -p "require('./apps/desktop/package.json').version")
+            TAG="v${VERSION}-beta.${GITHUB_RUN_NUMBER}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Release tag: $TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Setup Node.js (web)
         uses: actions/setup-node@v4
@@ -101,13 +85,16 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "apps/backend/uv.lock"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: "apps/backend/.python-version"
+      - name: Install python-build-standalone
+        run: uv python install 3.12
 
       - name: Install backend deps
-        run: cd apps/backend && uv sync --frozen
+        run: |
+          cd apps/backend
+          # 使用 uv 托管的 python-build-standalone 创建 venv，
+          # 避免使用 actions/setup-python 安装的官方 Python（dylib 路径硬编码，不可移植）
+          uv venv --python 3.12
+          uv sync --frozen
 
       - name: Prepare runtime
         run: cd apps/desktop && npm run prepare:runtime
@@ -133,17 +120,9 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.create-draft-release.outputs.tag_name }}
+          tag_name: ${{ steps.resolve_tag.outputs.tag }}
+          name: "Beta ${{ steps.resolve_tag.outputs.tag }}"
+          draft: false
+          prerelease: true
+          generate_release_notes: ${{ matrix.target == 'linux' }}
           files: ${{ matrix.files }}
-
-  publish-beta:
-    needs: [create-draft-release, build-desktop]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Publish release
-        run: |
-          TAG="${{ needs.create-draft-release.outputs.tag_name }}"
-          gh release edit "$TAG" --draft=false
-        env:
-          GH_TOKEN: ${{ github.token }}

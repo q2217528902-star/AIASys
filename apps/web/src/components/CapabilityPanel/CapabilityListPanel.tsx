@@ -63,7 +63,7 @@ const KIND_FILTERS = [
   { id: "all", label: "全部" },
   { id: "skill_pack", label: "技能" },
   { id: "mcp_server", label: "连接器" },
-  { id: "subagent", label: "专家协作节点" },
+  { id: "subagent", label: "专家" },
 ] as const;
 
 const STATUS_FILTERS = [
@@ -169,7 +169,7 @@ export function CapabilityListPanel({
 
   const isWorkspaceCap = (cap: unknown): cap is WorkspaceCapabilityItem =>
     typeof cap === "object" && cap !== null && "enabled" in cap;
-  const canToggle = (cap: WorkspaceCapabilityItem) => cap.kind !== "skill_pack";
+  const canToggle = (_cap: WorkspaceCapabilityItem) => true;
 
   const handleToggle = async (capId: string, enabled: boolean) => {
     setProcessingId(capId);
@@ -296,7 +296,7 @@ export function CapabilityListPanel({
         {filteredItems.map((cap) => {
           const capId = cap.capability_id;
           const ws = isWorkspaceCap(cap);
-          const status = ws ? cap.status : "available";
+          const status = ws ? (cap.enabled ? cap.status : "disabled") : "available";
           const active = selectedCapId === capId;
           return (
             <div

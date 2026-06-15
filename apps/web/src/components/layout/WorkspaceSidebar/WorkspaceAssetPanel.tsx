@@ -28,6 +28,7 @@ import {
   Loader2,
   RefreshCw,
   ServerCog,
+  Settings,
   Upload,
   X,
 } from "lucide-react";
@@ -190,27 +191,31 @@ function flattenGlobalResourcesToFiles(nodes: GlobalResourceNode[]): WorkspaceFi
 }
 
 function globalResourcesToFileTree(nodes: GlobalResourceNode[]): FileTreeNode[] {
-  return sortFileTreeNodes(nodes.map((node) => {
-    if (node.node_type === "directory") {
-      return {
-        name: node.name,
-        path: node.path,
-        absolutePath: node.absolute_path,
-        isDirectory: true,
-        children: globalResourcesToFileTree(node.children || []),
-        meta: node.meta,
-      };
-    }
+  return sortFileTreeNodes(
+    nodes
+      .filter((node) => !node.path.startsWith(".aiasys") && node.name !== ".aiasys")
+      .map((node) => {
+        if (node.node_type === "directory") {
+          return {
+            name: node.name,
+            path: node.path,
+            absolutePath: node.absolute_path,
+            isDirectory: true,
+            children: globalResourcesToFileTree(node.children || []),
+            meta: node.meta,
+          };
+        }
 
-    return {
-      name: node.name,
-      path: node.path,
-      absolutePath: node.absolute_path,
-      isDirectory: false,
-      file: globalResourceNodeToWorkspaceFile(node),
-      meta: node.meta,
-    };
-  }));
+        return {
+          name: node.name,
+          path: node.path,
+          absolutePath: node.absolute_path,
+          isDirectory: false,
+          file: globalResourceNodeToWorkspaceFile(node),
+          meta: node.meta,
+        };
+      }),
+  );
 }
 
 const runtimeStatusLabels: Record<string, string> = {
@@ -257,24 +262,6 @@ function parentPath(path?: string | null): string | null {
   const text = String(path || "").trim().replace(/\\/g, "/");
   if (!text || !text.includes("/")) return null;
   return text.slice(0, text.lastIndexOf("/"));
-}
-
-function formatRuntimeEntryLabel(
-  registry: WorkspaceRuntimeEnvironmentRegistry | null,
-  env: WorkspaceRuntimeEnvironment | null,
-  sandboxMode?: string | null,
-): string {
-  if (sandboxMode === "docker") {
-    return "当前绑定 Docker 沙盒";
-  }
-  if (env) {
-    const python = env.python_version ? `Python ${env.python_version}` : "Python 未锁定";
-    return `${runtimeKindLabel(env.kind)} · ${python} · ${env.package_count} 个包 · ${runtimeStatusLabel(env.status)}`;
-  }
-  if (registry && registry.total > 0) {
-    return `${registry.total} 个环境 · 未绑定`;
-  }
-  return "未初始化";
 }
 
 function MaterialState({ value }: { value: boolean | null }) {
@@ -524,8 +511,10 @@ interface WorkspaceAssetPanelProps {
   userId?: string;
   onOpenInMainCanvas?: (file: PreviewFile) => void;
   onEditInMainCanvas?: (file: PreviewFile) => void;
+  onOpenInBrowserTab?: (file: WorkspaceFile) => void;
   onOpenGlobalResourceInMainCanvas?: (node: GlobalResourceNode) => void;
   onOpenWorkspaceSettings?: () => void;
+  onOpenWorkspaceResourcesSettings?: () => void;
   surfaceMode?: "workbench" | "navigation";
 }
 
@@ -692,8 +681,10 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
   userId: _userId,
   onOpenInMainCanvas,
   onEditInMainCanvas,
+  onOpenInBrowserTab,
   onOpenGlobalResourceInMainCanvas,
   onOpenWorkspaceSettings,
+  onOpenWorkspaceResourcesSettings,
   surfaceMode = "workbench",
 }) => {
   const { session } = useAuthContext();
@@ -761,32 +752,6 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
       ),
     [runtimeBinding?.env_id, runtimeBinding?.sandbox_mode, runtimeRegistry],
   );
-  const runtimeEnvLabel = useMemo(
-    () =>
-      runtimeRegistryError
-        ? "状态读取失败"
-        : formatRuntimeEntryLabel(
-            runtimeRegistry,
-            selectedRuntimeEnv,
-            runtimeBinding?.sandbox_mode,
-          ),
-    [
-      runtimeBinding?.sandbox_mode,
-      runtimeRegistry,
-      runtimeRegistryError,
-      selectedRuntimeEnv,
-    ],
-  );
-
-  const handleOpenRuntimeDetails = useCallback(() => {
-    if (isNavigationMode) {
-      onOpenWorkspaceSettings?.();
-      return;
-    }
-    setIsRuntimeDetailsOpen(true);
-    setRuntimeCopyMessage(null);
-    void loadRuntimeRegistry();
-  }, [isNavigationMode, loadRuntimeRegistry, onOpenWorkspaceSettings]);
 
   const handleCopyRuntimePath = useCallback(async (value: string, label: string) => {
     const result = await writeTextToClipboard(value);
@@ -881,6 +846,19 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
       setCurrentResourceTree([]);
     }
   }, [workspaceId, isGlobal]);
+
+  // workspaceFiles 变化时同步刷新资源树（上传/删除等操作后）
+  const prevFileSignatureRef = useRef("");
+  useEffect(() => {
+    if (isGlobal || !workspaceId || !externalFiles) return;
+    const signature = externalFiles
+      .map((f) => `${f.name}:${f.size}:${f.mtime || ""}`)
+      .sort()
+      .join("|");
+    if (signature === prevFileSignatureRef.current) return;
+    prevFileSignatureRef.current = signature;
+    void fetchCurrentResourceTree();
+  }, [externalFiles, workspaceId, isGlobal, fetchCurrentResourceTree]);
 
   // Build file list based on scope
   const safeFiles = useMemo(() => {
@@ -1233,6 +1211,13 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
       onOpenInMainCanvas?.(buildPreviewFile(file));
     },
     [buildPreviewFile, onOpenInMainCanvas],
+  );
+
+  const handleOpenInBrowserTab = useCallback(
+    (file: WorkspaceFile) => {
+      onOpenInBrowserTab?.(file);
+    },
+    [onOpenInBrowserTab],
   );
 
   const handleEditFileInMainCanvas = useCallback(
@@ -1865,7 +1850,7 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
     ? "全局工作区"
     : pendingUploadedFiles.length > 0
       ? `待随下一条消息发送 ${pendingUploadedFiles.length} 个附件`
-      : "支持拖拽、粘贴、按钮上传";
+      : "支持拖拽、粘贴上传";
   const infoCardDescription = isGlobal
     ? "知识库、数据库、图谱等资源在所有任务工作区间共享。"
     : pendingUploadedFiles.length > 0
@@ -1925,25 +1910,6 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
               : undefined
           }
         >
-          {!isGlobal ? (
-            <button
-              type="button"
-              data-testid="workspace-runtime-env-controlled-entry"
-              onClick={handleOpenRuntimeDetails}
-              className={cn(
-                "flex w-full items-center gap-2 border-b border-border px-3 py-1.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-muted/40",
-                isRuntimeDetailsOpen && "bg-tertiary-container/50 text-on-tertiary-container",
-              )}
-            >
-              <ServerCog className="h-3 w-3 shrink-0" />
-              <span className="font-semibold text-foreground">运行环境</span>
-              <span className="min-w-0 flex-1 truncate">{runtimeEnvLabel}</span>
-              {isRuntimeRegistryLoading ? (
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-              ) : null}
-            </button>
-          ) : null}
-
           <AssetTreePanelHeader
             title={headerTitle}
             description={headerDescription}
@@ -1997,6 +1963,13 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
                   onClick={() => setFolderCollapseSignal((current) => current + 1)}
                   icon={<FolderTree className="h-3.5 w-3.5" />}
                 />
+                {onOpenWorkspaceSettings ? (
+                  <AssetHeaderAction
+                    label="工作区设置"
+                    onClick={onOpenWorkspaceSettings}
+                    icon={<Settings className="h-3.5 w-3.5" />}
+                  />
+                ) : null}
               </div>
             }
           />
@@ -2020,6 +1993,7 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
                 files={fileTreeFiles}
                 treeData={isGlobal ? globalTreeData : currentTreeData}
                 workspaceId={workspaceId}
+                scope={scope}
                 sessionId={sessionId}
                 searchQuery={searchQuery}
                 onFileSelect={handleFileSelect}
@@ -2027,6 +2001,7 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
                 onDeleteFile={isGlobal ? handleGlobalDeleteFile : handleDeleteCurrentFile}
                 onDeleteFolder={isGlobal ? handleDeleteGlobalFolder : handleDeleteCurrentFolder}
                 onOpenInMainCanvas={handleOpenFileInMainCanvas}
+                onOpenInBrowserTab={handleOpenInBrowserTab}
                 onEditInMainCanvas={handleEditFileInMainCanvas}
                 onOpenFileHistory={handleOpenFileHistory}
                 onExportMarkdownFile={isGlobal ? undefined : onExportMarkdownFile}
@@ -2057,6 +2032,17 @@ const WorkspaceAssetPanelComponent: React.FC<WorkspaceAssetPanelProps> = ({
                   <p className="text-sm font-medium text-foreground/80">{emptyTitle}</p>
                   <p className="text-xs leading-5 text-muted-foreground">{emptyDescription}</p>
                 </div>
+                {isGlobal && (onOpenWorkspaceResourcesSettings || onOpenWorkspaceSettings) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-4 h-8 text-xs"
+                    onClick={onOpenWorkspaceResourcesSettings ?? onOpenWorkspaceSettings}
+                  >
+                    管理全局资源
+                  </Button>
+                ) : null}
               </div>
             )}
           </div>

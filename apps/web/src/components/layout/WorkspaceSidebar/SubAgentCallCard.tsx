@@ -9,10 +9,12 @@ import { useState } from "react";
 import {
   Bot,
   Play,
+  RefreshCw,
   CheckCircle2,
   XCircle,
   Clock,
   Pause,
+  Square,
   ChevronRight,
   Terminal,
   Pin,
@@ -52,6 +54,7 @@ export const statusConfig: Record<string, StatusIconConfig> = {
   completed: { label: "已完成", icon: CheckCircle2, color: "text-success", bgColor: "bg-success/10", dotColor: "bg-success" },
   failed: { label: "失败", icon: XCircle, color: "text-error", bgColor: "bg-error/10", dotColor: "bg-error" },
   cancelled: { label: "已取消", icon: Pause, color: "text-warning", bgColor: "bg-warning-container0/10", dotColor: "bg-warning" },
+  closed: { label: "已关闭", icon: Square, color: "text-muted-foreground", bgColor: "bg-muted/10", dotColor: "bg-muted-foreground" },
   queued: { label: "排队中", icon: Clock, color: "text-warning", bgColor: "bg-warning/10", dotColor: "bg-warning" },
 };
 
@@ -166,6 +169,7 @@ export function SubAgentCallCard({
   onTogglePin,
   onOpenInMainCanvas,
   allowStopActions = false,
+  compact = false,
 }: {
   call: SubAgentCallItem;
   level: number;
@@ -179,6 +183,7 @@ export function SubAgentCallCard({
   onTogglePin?: (agentId: string) => void;
   onOpenInMainCanvas?: (subagentId: string) => void;
   allowStopActions?: boolean;
+  compact?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { subagent, step_number, tool_call_id } = call;
@@ -273,13 +278,16 @@ export function SubAgentCallCard({
           </div>
         </div>
 
-        {/* 操作按钮（hover 或 pinned 时显示） */}
-        <div className="flex items-center gap-0 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* 操作按钮：紧凑模式下 pinned/选中节点常驻显示关键操作 */}
+        <div className="flex items-center gap-0 shrink-0">
           {onOpenInMainCanvas ? (
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-muted-foreground/50 hover:text-muted-foreground"
+              className={cn(
+                "h-6 w-6 text-muted-foreground/50 hover:text-muted-foreground transition-opacity",
+                compact && isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+              )}
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenInMainCanvas(subagent.id);
@@ -294,10 +302,11 @@ export function SubAgentCallCard({
               variant="ghost"
               size="icon"
               className={cn(
-                "h-6 w-6",
+                "h-6 w-6 transition-opacity",
                 isPinned
                   ? "text-tertiary opacity-100"
-                  : "text-muted-foreground/50 hover:text-muted-foreground",
+                  : "text-muted-foreground/50 hover:text-muted-foreground opacity-0 group-hover:opacity-100",
+                compact && isPinned && "opacity-100",
               )}
               onClick={(e) => {
                 e.stopPropagation();
@@ -312,26 +321,28 @@ export function SubAgentCallCard({
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-warning hover:text-warning shrink-0"
+              className="h-6 w-6 text-warning hover:text-warning shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={(e) => {
                 e.stopPropagation();
                 onStop();
               }}
+              title="停止子 Agent"
             >
-              <Pause className="w-3 h-3" />
+              <Square className="w-3 h-3" />
             </Button>
           ) : null}
           {allowStopActions && onRetry && (subagent.status === "failed" || subagent.status === "cancelled") ? (
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-primary hover:text-primary shrink-0"
+              className="h-6 w-6 text-primary hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={(e) => {
                 e.stopPropagation();
                 onRetry();
               }}
+              title="重试任务"
             >
-              <Play className="w-3 h-3" />
+              <RefreshCw className="w-3 h-3" />
             </Button>
           ) : null}
         </div>
@@ -442,7 +453,9 @@ export function NestedSubAgentCallView({
   onRetry,
   onTaskClick,
   onTogglePin,
+  onOpenInMainCanvas,
   allowStopActions,
+  compact = false,
 }: {
   node: NestedSubAgentCall;
   level: number;
@@ -453,7 +466,9 @@ export function NestedSubAgentCallView({
   onRetry: (agentId: string) => Promise<void>;
   onTaskClick?: (toolCallId: string) => void;
   onTogglePin?: (agentId: string) => void;
+  onOpenInMainCanvas?: (subagentId: string) => void;
   allowStopActions: boolean;
+  compact?: boolean;
 }) {
   const agentId = node.call.subagent.id;
   return (
@@ -469,7 +484,9 @@ export function NestedSubAgentCallView({
         onRetry={onRetry ? () => onRetry(agentId) : undefined}
         onTaskClick={onTaskClick}
         onTogglePin={onTogglePin}
+        onOpenInMainCanvas={onOpenInMainCanvas}
         allowStopActions={allowStopActions}
+        compact={compact}
       />
       {node.children.length > 0 ? (
         <div className="mt-2 space-y-2">
@@ -485,7 +502,9 @@ export function NestedSubAgentCallView({
               onRetry={onRetry}
               onTaskClick={onTaskClick}
               onTogglePin={onTogglePin}
+              onOpenInMainCanvas={onOpenInMainCanvas}
               allowStopActions={allowStopActions}
+              compact={compact}
             />
           ))}
         </div>

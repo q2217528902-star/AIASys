@@ -2,9 +2,6 @@ import {
   ArrowUp,
   Brain,
   FileText,
-  FolderUp,
-  Minimize2,
-  ServerCog,
   SlidersHorizontal,
   StopCircle,
   Upload,
@@ -25,9 +22,12 @@ import type { LLMModelConfig } from "@/lib/api/llm";
 import { API_ENDPOINTS, getCurrentUserId } from "@/config/api";
 import { extractClipboardFiles } from "@/utils/clipboardFiles";
 import { useDragDrop } from "@/hooks/useDragDrop";
+import {
+  WORKSPACE_FILE_DRAG_MIME,
+  type WorkspaceFileReferenceDragPayload,
+} from "@/utils/workspaceFileDrag";
 import { cn } from "@/lib/utils";
 import { ModelSelector } from "./ModelSelector";
-import { HistoryIcon } from "./chatShellIcons";
 
 interface UploadedFile {
   filename: string;
@@ -46,23 +46,16 @@ interface InputAreaProps {
   uploadedFiles: UploadedFile[];
   onRemoveFile: (index: number) => void;
   onAddFileClick: () => void;
-  onImportFromSession?: () => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onFileChange: (e: ChangeEvent<HTMLInputElement>) => void;
   isUploading?: boolean;
   isPrewarming?: boolean;
-  /** 当前 Python 环境名称（纯展示） */
-  currentEnv?: { id?: string; name?: string; image?: string; sandbox_mode?: string } | null;
   /** 是否正在准备 Python 环境 */
   isInitializingEnvironment?: boolean;
   /** 当前会话ID */
   sessionId?: string;
-  /** 当前会话是否已有消息 */
-  hasMessages?: boolean;
   /** 是否正在压缩当前会话的上下文 */
   isCompactingConversation?: boolean;
-  /** 压缩当前会话上下文 */
-  onCompactConversation?: (instruction?: string) => Promise<void> | void;
   /** 工作区是否已配置 MCP */
   hasMCPConfig?: boolean;
   /** 用户自定义的 LLM 模型列表 */
@@ -82,12 +75,8 @@ interface InputAreaProps {
   onOpenConfig?: () => void;
   /** 打开当前会话工具配置 */
   onOpenToolConfig?: () => void;
-  /** 打开 Python 环境面板 */
-  onOpenRuntimeConfig?: () => void;
   /** 需要把焦点重新带回输入框时递增 */
   focusSignal?: number;
-  /** 上传文件到工作区（不加入消息附件） */
-  onUploadToWorkspace?: (files: FileList | File[]) => Promise<void> | void;
 }
 
 export function InputArea({
@@ -100,17 +89,13 @@ export function InputArea({
   uploadedFiles,
   onRemoveFile,
   onAddFileClick,
-  onImportFromSession,
   fileInputRef,
   onFileChange,
   isUploading = false,
   isPrewarming = false,
-  currentEnv,
   isInitializingEnvironment = false,
   sessionId,
-  hasMessages = false,
   isCompactingConversation = false,
-  onCompactConversation,
   userModels = [],
   selectedModelId,
   effectiveModelDisplayName,
@@ -122,9 +107,7 @@ export function InputArea({
   selectedModelSupportsThinking = false,
   onOpenConfig,
   onOpenToolConfig,
-  onOpenRuntimeConfig,
   focusSignal,
-  onUploadToWorkspace,
 }: InputAreaProps) {
   const isImageFile = (filename: string) =>
     /\.(png|jpe?g|gif|webp)$/i.test(filename);
@@ -181,28 +164,132 @@ export function InputArea({
     };
   }, [showAttachments]);
 
-  // 拖拽上传文件到工作区
+  // 拖拽文件到输入框，作为消息附件
   const handleWorkspaceDrop = useCallback(
     (files: FileList) => {
-      if (!onUploadToWorkspace || isUploading || isPrewarming || isInitializingEnvironment) return;
-      void onUploadToWorkspace(files);
+      if (!onFileChange || isUploading || isPrewarming || isInitializingEnvironment) return;
+      const mockEvent = {
+        target: { files },
+      } as React.ChangeEvent<HTMLInputElement>;
+      onFileChange(mockEvent);
     },
-    [onUploadToWorkspace, isUploading, isPrewarming, isInitializingEnvironment],
+    [onFileChange, isUploading, isPrewarming, isInitializingEnvironment],
   );
-  const { isDragging, dragProps } = useDragDrop(handleWorkspaceDrop);
-
-  // 上传文件到工作区（独立入口，不加入消息附件）
-  const workspaceUploadInputRef = useRef<HTMLInputElement>(null);
-  const handleWorkspaceUploadChange = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const files = e.target.files;
-      if (!files || files.length === 0) return;
-      if (!onUploadToWorkspace || isUploading || isPrewarming || isInitializingEnvironment) return;
-      void onUploadToWorkspace(files);
-      // 重置 input 以便重复选择同一文件
-      e.target.value = "";
+  const {
+    isDragging,
+    dragProps: {
+      onDragEnter: onWorkspaceDragEnter,
+      onDragOver: onWorkspaceDragOver,
+      onDragLeave: onWorkspaceDragLeave,
+      onDrop: onWorkspaceDropEvent,
     },
-    [onUploadToWorkspace, isUploading, isPrewarming, isInitializingEnvironment]
+  } = useDragDrop(handleWorkspaceDrop);
+
+  const [isReferenceDragging, setIsReferenceDragging] = useState(false);
+
+  const hasWorkspaceFileReference = useCallback(
+    (dataTransfer: DataTransfer) => {
+      return Array.from(dataTransfer.types).includes(WORKSPACE_FILE_DRAG_MIME);
+    },
+    [],
+  );
+
+  const insertReferencePaths = useCallback(
+    (paths: string[]) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      const textToInsert = paths.join(" ");
+      if (!textToInsert) return;
+
+      const start = textarea.selectionStart ?? 0;
+      const end = textarea.selectionEnd ?? 0;
+      const before = inputValue.slice(0, start);
+      const after = inputValue.slice(end);
+      const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+      const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
+      const inserted =
+        (needsLeadingSpace ? " " : "") +
+        textToInsert +
+        (needsTrailingSpace ? " " : "");
+      const newValue = before + inserted + after;
+      onInputChange(newValue);
+
+      // 光标放到插入内容之后
+      const newCursor = start + inserted.length;
+      requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(newCursor, newCursor);
+      });
+    },
+    [inputValue, onInputChange],
+  );
+
+  /**
+   * 从 DataTransfer 解析工作区文件引用路径。
+   * 优先使用自定义 MIME payload；某些浏览器/环境下自定义 MIME 不可用，
+   * 则回退到 text/plain（FileTreeRow 单文件拖拽时会写入原始文件名）。
+   */
+  const extractReferencePaths = useCallback(
+    (dataTransfer: DataTransfer): string[] => {
+      if (Array.from(dataTransfer.types).includes(WORKSPACE_FILE_DRAG_MIME)) {
+        const raw = dataTransfer.getData(WORKSPACE_FILE_DRAG_MIME);
+        if (raw) {
+          try {
+            const payload = JSON.parse(raw) as WorkspaceFileReferenceDragPayload;
+            if (payload.paths && payload.paths.length > 0) {
+              return payload.paths;
+            }
+          } catch {
+            // 解析失败继续尝试回退
+          }
+        }
+      }
+
+      // 回退：text/plain 中的单个文件名，按当前工作区路径补全
+      const plain = dataTransfer.getData("text/plain");
+      if (plain && !plain.includes("\n") && !plain.includes("/")) {
+        return [`/workspace/${plain}`];
+      }
+
+      return [];
+    },
+    [],
+  );
+
+  const handleReferenceDrop = useCallback(
+    (e: React.DragEvent) => {
+      const paths = extractReferencePaths(e.dataTransfer);
+      if (paths.length === 0) return false;
+
+      e.preventDefault();
+      e.stopPropagation();
+      setIsReferenceDragging(false);
+      insertReferencePaths(paths);
+      return true;
+    },
+    [extractReferencePaths, insertReferencePaths],
+  );
+
+  const handleReferenceDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!hasWorkspaceFileReference(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      setIsReferenceDragging(true);
+    },
+    [hasWorkspaceFileReference],
+  );
+
+  const handleReferenceDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (!isReferenceDragging) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setIsReferenceDragging(false);
+    },
+    [isReferenceDragging],
   );
 
   // 处理粘贴文件
@@ -228,36 +315,28 @@ export function InputArea({
     },
     [onFileChange, isUploading, isPrewarming, isInitializingEnvironment]
   );
-  const canCompactConversation =
-    Boolean(sessionId) &&
-    hasMessages &&
-    !isRunning &&
-    !isCompactingConversation;
-  const compactTooltip = !sessionId
-    ? "请先创建或切换到一个可用会话。"
-    : !hasMessages
-      ? "当前会话还没有可压缩的历史消息。"
-      : isRunning
-        ? "当前会话运行中，结束本轮执行后才能压缩上下文。"
-        : isCompactingConversation
-          ? "正在压缩上下文，请稍候。"
-          : "压缩历史记录，不影响工作区文件和执行记录。";
-  const runtimeLabel = currentEnv?.name?.trim() || "无 Python 环境";
-  const runtimeMode =
-    currentEnv?.sandbox_mode === "docker" || currentEnv?.image === "docker"
-      ? "Docker"
-    : currentEnv?.image === "uv"
-      ? "Python"
-      : currentEnv?.image === "none" || currentEnv?.id === "none"
-        ? "Python"
-        : currentEnv?.image || "Python";
 
   return (
-    <div className="p-4 md:p-6 bg-muted relative" {...dragProps}>
+    <div
+      className="p-4 md:p-6 bg-muted relative"
+      onDragEnter={onWorkspaceDragEnter}
+      onDragOver={(e) => {
+        handleReferenceDragOver(e);
+        onWorkspaceDragOver(e);
+      }}
+      onDragLeave={(e) => {
+        handleReferenceDragLeave(e);
+        onWorkspaceDragLeave(e);
+      }}
+      onDrop={(e) => {
+        if (handleReferenceDrop(e)) return;
+        onWorkspaceDropEvent(e);
+      }}
+    >
       <div
         className={cn(
           "max-w-4xl mx-auto rounded-xl border shadow-sm p-4 min-h-[120px] relative flex flex-col transition-colors",
-          isDragging
+          isDragging || isReferenceDragging
             ? "bg-primary/5 border-primary/30 ring-1 ring-primary/20"
             : "bg-muted border-border",
         )}
@@ -326,7 +405,7 @@ export function InputArea({
               ? "工作区准备中，请稍候..."
               : isUploading
                 ? "文件正在上传中..."
-                : "询问任何问题"
+                : "可以拖拽、上传文件，并询问任何问题"
           }
           disabled={isUploading || isPrewarming || isInitializingEnvironment}
           rows={1}
@@ -350,17 +429,6 @@ export function InputArea({
                   <Upload size={16} />
                   <span className="font-mono">本地上传</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onImportFromSession?.();
-                    setShowAttachments(false);
-                  }}
-                  className="w-full text-left px-4 py-2 hover:bg-accent flex items-center gap-2 text-sm text-foreground transition-colors"
-                >
-                    <HistoryIcon className="h-4 w-4" />
-                    <span className="font-mono">从历史导入</span>
-                  </button>
                 </div>
             )}
             {/* 添加文件按钮 */}
@@ -377,35 +445,6 @@ export function InputArea({
             >
               <Upload size={18} />
             </button>
-
-            {/* 上传文件到工作区 */}
-            {onUploadToWorkspace ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => workspaceUploadInputRef.current?.click()}
-                    className="flex-shrink-0 p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    title="上传文件到工作区"
-                    disabled={isUploading || isPrewarming || isInitializingEnvironment}
-                  >
-                    <FolderUp size={18} />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={6}>
-                  上传文件到工作区
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-            <input
-              ref={workspaceUploadInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleWorkspaceUploadChange}
-              title="上传文件到工作区"
-              aria-label="上传文件到工作区"
-            />
 
             {/* 模型选择区域 - 类似 OpenAI/Claude 的下拉菜单 */}
             <ModelSelector
@@ -458,32 +497,6 @@ export function InputArea({
               </Tooltip>
             ) : null}
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={onOpenRuntimeConfig}
-                  disabled={!onOpenRuntimeConfig}
-                  className="flex min-w-0 max-w-[168px] flex-shrink items-center gap-1.5 rounded-md bg-secondary px-2.5 py-2 text-left text-xs text-secondary-foreground transition-colors hover:bg-secondary/80 disabled:cursor-default disabled:opacity-80"
-                  data-testid="input-runtime-env"
-                  aria-label={`当前 Python 环境：${runtimeLabel}`}
-                >
-                  <ServerCog className="h-4 w-4 flex-shrink-0" />
-                  <span className="flex-shrink-0 font-medium">
-                    {runtimeMode}
-                  </span>
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    {runtimeLabel}
-                  </span>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" sideOffset={6}>
-                {onOpenRuntimeConfig
-                  ? `当前 Python 环境：${runtimeLabel}。点击管理 Python 环境`
-                  : `当前 Python 环境：${runtimeLabel}`}
-              </TooltipContent>
-            </Tooltip>
-
             {onOpenToolConfig ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -501,35 +514,6 @@ export function InputArea({
                 </TooltipTrigger>
                 <TooltipContent side="top" sideOffset={6}>
                   当前会话工具配置
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-
-            {sessionId && onCompactConversation ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!canCompactConversation) {
-                        return;
-                      }
-                      void onCompactConversation();
-                    }}
-                    disabled={!canCompactConversation}
-                    className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-2 text-xs text-secondary-foreground transition-colors hover:bg-secondary/80 disabled:cursor-not-allowed disabled:opacity-50"
-                    title="压缩上下文"
-                    aria-label="压缩上下文"
-                    data-testid="input-compact-conversation"
-                  >
-                    <Minimize2 className="h-4 w-4" />
-                    <span className="font-medium">
-                      {isCompactingConversation ? "压缩中" : "压缩"}
-                    </span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={6}>
-                  {compactTooltip}
                 </TooltipContent>
               </Tooltip>
             ) : null}

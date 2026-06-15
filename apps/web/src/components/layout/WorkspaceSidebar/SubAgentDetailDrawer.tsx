@@ -11,6 +11,7 @@ import {
   CheckCircle2, 
   XCircle, 
   Pause,
+  Square,
   Clock,
   RefreshCw,
   Loader2,
@@ -53,6 +54,8 @@ interface SubAgentDetailDrawerProps {
   allowRetryActions?: boolean;
   /** 内嵌模式：不渲染 Sheet 外壳，直接输出内容面板 */
   inline?: boolean;
+  onOpenWorkspaceFile?: (file: { name: string }) => void;
+  onOpenInBrowserTab?: (url: string) => void;
 }
 
 const statusConfigMap: Record<string, { label: string; icon: typeof Clock; color: string; animate?: boolean }> = {
@@ -61,6 +64,7 @@ const statusConfigMap: Record<string, { label: string; icon: typeof Clock; color
   completed: { label: "已完成", icon: CheckCircle2, color: "text-success" },
   failed: { label: "失败", icon: XCircle, color: "text-error" },
   cancelled: { label: "已取消", icon: Pause, color: "text-warning" },
+  closed: { label: "已关闭", icon: Square, color: "text-muted-foreground" },
   queued: { label: "排队中", icon: Clock, color: "text-warning" },
 };
 
@@ -373,6 +377,8 @@ export function SubAgentDetailDrawer({
   allowStopActions = false,
   allowRetryActions = false,
   inline = false,
+  onOpenWorkspaceFile,
+  onOpenInBrowserTab,
 }: SubAgentDetailDrawerProps) {
   void userId;
   const [isStopping, setIsStopping] = useState(false);
@@ -641,6 +647,8 @@ export function SubAgentDetailDrawer({
                                 <ChartAwareMarkdown
                                   content={message.content}
                                   paragraphClassName="my-0"
+                                  onOpenInMainCanvas={onOpenWorkspaceFile ? (file) => onOpenWorkspaceFile({ name: file.name }) : undefined}
+                                  onOpenInBrowserTab={onOpenInBrowserTab}
                                 />
                               </div>
                             </div>
@@ -730,6 +738,8 @@ export function SubAgentDetailDrawer({
                                 <ChartAwareMarkdown
                                   content={message.content}
                                   paragraphClassName="my-0"
+                                  onOpenInMainCanvas={onOpenWorkspaceFile ? (file) => onOpenWorkspaceFile({ name: file.name }) : undefined}
+                                  onOpenInBrowserTab={onOpenInBrowserTab}
                                 />
                               </div>
                             </div>
@@ -1063,6 +1073,8 @@ export function SubAgentDetailDrawer({
                                 <ChartAwareMarkdown
                                   content={message.content}
                                   paragraphClassName="my-0"
+                                  onOpenInMainCanvas={onOpenWorkspaceFile ? (file) => onOpenWorkspaceFile({ name: file.name }) : undefined}
+                                  onOpenInBrowserTab={onOpenInBrowserTab}
                                 />
                               </div>
                             </div>
@@ -1152,6 +1164,8 @@ export function SubAgentDetailDrawer({
                                 <ChartAwareMarkdown
                                   content={message.content}
                                   paragraphClassName="my-0"
+                                  onOpenInMainCanvas={onOpenWorkspaceFile ? (file) => onOpenWorkspaceFile({ name: file.name }) : undefined}
+                                  onOpenInBrowserTab={onOpenInBrowserTab}
                                 />
                               </div>
                             </div>

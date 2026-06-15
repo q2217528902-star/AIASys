@@ -81,6 +81,7 @@ export interface AiMessageContentProps {
    * 在主画布打开工作区产物
    */
   onOpenWorkspaceArtifact?: (file: PreviewFile) => void;
+  onOpenInBrowserTab?: (path: string) => void;
   /**
    * 是否在消息流中内联显示工具执行结果（默认 false，结果通过弹窗查看）
    */
@@ -152,6 +153,7 @@ export const AiMessageContent = memo(function AiMessageContent({
   sessionId,
   taskId,
   onOpenWorkspaceArtifact,
+  onOpenInBrowserTab,
   showToolOutputs = false,
 }: AiMessageContentProps) {
   const {
@@ -214,44 +216,27 @@ export const AiMessageContent = memo(function AiMessageContent({
     token: undefined,
     sessionId,
     onOpenWorkspaceArtifact,
+    onOpenInBrowserTab,
   };
 
-  // 按顺序渲染 segments
-  // 流式过程中保持到达时序，只在历史恢复（非流式）时做防御性排序
+  // 按顺序渲染 segments，保持 segments 原始到达/恢复顺序
+  // 不再按类型排序，避免 multi-turn 场景下 turn 标记与对应内容被拆散堆叠
   const renderSegments = () => {
     if (!segments || segments.length === 0) {
       return null;
     }
 
-    // 防御性排序：仅在非流式（历史恢复）时按类型排序
-    // 流式过程中 segments 已按到达时序排列
-    const SEGMENT_ORDER: Record<string, number> = {
-      turn: 0,
-      think: 0,
-      tool_call: 2,
-      tool_output: 3,
-      text: 4,
-      monitor: 5,
-    };
-    let sortedSegments: ChatSegment[];
-    if (isStreaming) {
-      // 流式过程中保持到达时序
-      sortedSegments = segments;
-    } else {
-      // 历史恢复时按类型排序
-      sortedSegments = [...segments].sort((a, b) => {
-        const orderA = SEGMENT_ORDER[a.type] ?? 99;
-        const orderB = SEGMENT_ORDER[b.type] ?? 99;
-        return orderA - orderB;
-      });
-    }
-
     // 合并连续的同类型 segments
+    // 仅合并 text / think，tool_call / tool_output / monitor / turn 保持独立
+    const MERGEABLE_TYPES = new Set<string>(["text", "think"]);
     const mergedSegments: ChatSegment[] = [];
-    for (const seg of sortedSegments) {
+    for (const seg of segments) {
       const lastSeg = mergedSegments[mergedSegments.length - 1];
-      if (lastSeg && lastSeg.type === seg.type && seg.type !== "turn") {
-        // 合并同类型 segment 的内容，turn 标记不合并
+      if (
+        lastSeg &&
+        lastSeg.type === seg.type &&
+        MERGEABLE_TYPES.has(seg.type)
+      ) {
         lastSeg.content += seg.content;
       } else {
         mergedSegments.push({ ...seg });
@@ -268,6 +253,7 @@ export const AiMessageContent = memo(function AiMessageContent({
             isStreaming={isStreaming && !seg.isComplete}
             defaultOpen={isStreaming}
             onOpenInMainCanvas={onOpenWorkspaceArtifact}
+            onOpenInBrowserTab={onOpenInBrowserTab}
           />
         );
       }
@@ -286,13 +272,14 @@ export const AiMessageContent = memo(function AiMessageContent({
         return (
           <div
             key={`seg-text-${idx}`}
-            className="prose prose-sm max-w-none min-w-0 break-all"
+            className={`prose prose-sm max-w-none min-w-0 break-all ${seg.isError ? "rounded-md border border-red-200 bg-red-50/50 px-3 py-2" : ""}`}
           >
             <ChartAwareMarkdown
               content={processedContent}
               token={undefined}
               sessionId={sessionId}
               onOpenInMainCanvas={onOpenWorkspaceArtifact}
+              onOpenInBrowserTab={onOpenInBrowserTab}
             />
           </div>
         );
@@ -417,13 +404,13 @@ export const AiMessageContent = memo(function AiMessageContent({
         return (
           <div
             key={`seg-turn-${idx}`}
-            className="flex items-center gap-2 my-3"
+            className="flex w-full items-center gap-3 my-4"
           >
-            <div className="flex-1 h-px bg-border/60" />
-            <span className="text-[10px] text-muted-foreground font-medium whitespace-nowrap">
+            <div className="h-px flex-1 bg-border/70" />
+            <span className="rounded-full bg-muted px-2.5 py-0.5 text-[10px] font-medium text-muted-foreground whitespace-nowrap">
               Turn {seg.turnN ?? "?"}
             </span>
-            <div className="flex-1 h-px bg-border/60" />
+            <div className="h-px flex-1 bg-border/70" />
           </div>
         );
       }
@@ -434,21 +421,22 @@ export const AiMessageContent = memo(function AiMessageContent({
 
   return (
     <AiMessageProvider state={state} actions={actions} meta={meta}>
-      <div className="min-w-0 py-2">
+      <div className="min-w-0 px-0.5 py-2">
         {/* 加载中占位符 */}
         {isEmpty && isStreaming && !isStopped && <LoadingPlaceholder />}
 
         {/* 终止状态提示 */}
         {isStopped && <StoppedIndicator />}
 
-        {/* 纯文本内容（没有 text segments 时渲染 content 作为后备） */}
-        {content && texts.length === 0 && (
+        {/* 纯文本内容（没有任何 segments 时渲染 content 作为后备，兼容旧数据） */}
+        {content && (!segments || segments.length === 0) && (
           <div className="prose prose-sm max-w-none min-w-0 break-all">
             <ChartAwareMarkdown
               content={content}
               token={undefined}
               sessionId={sessionId}
               onOpenInMainCanvas={onOpenWorkspaceArtifact}
+              onOpenInBrowserTab={onOpenInBrowserTab}
             />
           </div>
         )}

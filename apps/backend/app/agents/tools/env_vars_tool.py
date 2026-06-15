@@ -1,8 +1,8 @@
 """环境变量管理工具。
 
-提供环境变量的读取、设置和删除能力。
-设置/删除操作作用于工作区级别（workspace registry 的 runtime_binding.env_vars），
-不会修改全局环境变量。
+提供工作区级别环境变量的完整管理能力：列出、读取、设置、删除。
+所有操作作用于 workspace registry 的 runtime_binding.env_vars，
+跨会话持久化，不会修改系统环境变量。
 """
 
 from __future__ import annotations
@@ -98,6 +98,11 @@ def _resolve_workspace_scope(
     return "当前会话没有绑定可解析的工作区，无法管理工作区环境变量。"
 
 
+# ---------------------------------------------------------------------------
+# ListEnvVars
+# ---------------------------------------------------------------------------
+
+
 class ListEnvVarsParams(BaseModel):
     """ListEnvVars 参数。"""
 
@@ -105,27 +110,30 @@ class ListEnvVarsParams(BaseModel):
 
 
 class ListEnvVars(AiasysTool):
-    """列出当前会话运行态可用的环境变量名。"""
+    """列出当前工作区可用的环境变量名。"""
 
     name: str = "ListEnvVars"
-    description: str = """列出当前工作区的环境变量名。
+    risk_level: str = "readonly"
+    effect_scope: str = "session"
+    side_effect: bool = False
+    description: str = """列出当前工作区已配置的环境变量名。
 
 适用场景：
-- 查看当前工作区设置了哪些环境变量
-- 列出环境变量名称列表
+- 用户问"工作区设置了哪些环境变量"时
+- 需要查看当前工作区配置了哪些变量名（不包含值）
 
 返回内容：
 - count: 变量名数量
 - env_vars: 按字母序排列的环境变量名列表
 
 为什么用 ListEnvVars 而不是 Shell `env`：
+- 只返回工作区级别的变量，不会混入系统环境变量，结果精准
 - 返回结构化 JSON，方便后续处理
-- 包含工作区持久化环境变量 + 当前会话注入的变量，范围明确
-- Shell `env` 输出是纯文本，需要额外解析
+- Shell `env` 会列出上百个系统变量，需要额外过滤和解析
 
 限制：
 - 只返回变量名，不返回变量值
-- 不适合用来读取密钥值；读取具体变量值请用 GetEnvVar 或由代码运行环境自行按需访问
+- 读取具体变量值请用 GetEnvVar
 """
     params: type[BaseModel] = ListEnvVarsParams
 
@@ -141,8 +149,16 @@ class ListEnvVars(AiasysTool):
         effective_env = build_sanitized_kernel_env(custom_env_vars=custom_env_vars)
         env_vars = sorted(effective_env.keys())
 
+        hint = ""
+        if env_vars:
+            hint = (
+                "用户已要求删除/移除环境变量时，请立即调用 DeleteEnvVar(name='<变量名>')。\n"
+                "如果只是查看列表，已获得结果，请直接整理回复用户，不要再调用其他工具。\n\n"
+            )
+        else:
+            hint = "当前工作区没有环境变量。\n\n"
         return ToolResult(
-            content=json.dumps(
+            content=hint + json.dumps(
                 {
                     "status": "success",
                     "count": len(env_vars),
@@ -169,6 +185,9 @@ class GetEnvVar(AiasysTool):
     """读取当前工作区中某个环境变量的值。"""
 
     name: str = "GetEnvVar"
+    risk_level: str = "readonly"
+    effect_scope: str = "session"
+    side_effect: bool = False
     description: str = """读取当前工作区中某个环境变量的值。
 
 适用场景：
@@ -249,6 +268,9 @@ class SetEnvVar(AiasysTool):
     """设置工作区级别的环境变量。"""
 
     name: str = "SetEnvVar"
+    risk_level: str = "high"
+    effect_scope: str = "workspace"
+    side_effect: bool = True
     description: str = """设置/修改当前工作区的环境变量。变量写入当前工作区 runtime_binding.env_vars。
 
 适用场景：
@@ -321,18 +343,22 @@ class DeleteEnvVar(AiasysTool):
     """删除工作区级别的环境变量。"""
 
     name: str = "DeleteEnvVar"
-    description: str = """删除/移除当前工作区的环境变量（从当前工作区 runtime_binding.env_vars 中永久移除）。
+    risk_level: str = "high"
+    effect_scope: str = "workspace"
+    side_effect: bool = True
+    description: str = """删除/移除当前工作区的环境变量（从工作区注册表中永久删除）。
 
 适用场景：
-- 删除不再使用的环境变量
-- 清理临时配置
+- 用户说"删除环境变量""移除变量""这个变量不用了"时
+- ListEnvVars 确认目标变量后，必须立即调用本工具完成删除
+
+正确做法 vs 错误做法：
+- 正确：用户说"删掉 API_KEY" → 调用 DeleteEnvVar(name="API_KEY")
+- 错误：用户说"删掉 API_KEY" → 只调用 ListEnvVars 查看，或尝试 Shell `unset`
 
 为什么用 DeleteEnvVar 而不是 Shell `unset`：
-- **永久删除**：从工作区注册表中永久删除，跨会话生效。Shell `unset` 只在当前 Shell 进程生效，关闭 Shell 后变量仍然存在，下次打开新 Shell 时变量还会存在
-- **精确性**：只删除工作区级别的变量，不会误删系统环境变量
-- **同步性**：删除后自动同步到当前会话运行环境，立即生效
-
-重要：不要用 Shell `unset` 或 `export VAR=` 来删除环境变量，这不会持久化到工作区。必须用此工具才能永久删除。
+- **永久删除**：从工作区注册表中永久删除，跨会话生效
+- Shell `unset` / `export VAR=` 只在当前 Shell 进程生效，关闭 Shell 后变量仍然存在
 
 注意：只能删除工作区级别的环境变量，无法删除全局环境变量或系统环境变量。
 """

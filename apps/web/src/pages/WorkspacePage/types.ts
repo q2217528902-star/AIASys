@@ -10,7 +10,8 @@ export type ChatSegment = {
     | "tool_output"
     | "think"
     | "monitor"
-    | "turn";
+    | "turn"
+    | "compaction_summary";
   content: string;
   toolName?: string;
   toolCallId?: string;
@@ -65,7 +66,21 @@ export type AskUserChatItem = {
   timestamp: Date;
 };
 
-export type ChatItem = MessageChatItem | AskUserChatItem;
+export type CapabilityConfirmationChatItem = {
+  type: "capability_confirmation";
+  id: string; // tool_call_id
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  prompt: string;
+  session_id: string;
+  status: "pending" | "approved" | "rejected" | "timeout";
+  subagent_name?: string;
+  agent_id?: string;
+  pattern_key?: string;
+  timestamp: Date;
+};
+
+export type ChatItem = MessageChatItem | AskUserChatItem | CapabilityConfirmationChatItem;
 
 export type SessionHistoryContentItem = {
   type: string;
@@ -81,11 +96,21 @@ export type SessionHistoryContentItem = {
 export type SessionHistoryMessage = {
   id?: string;
   role: "user" | "assistant" | "tool" | "system";
+  origin?:
+    | "user"
+    | "assistant"
+    | "tool"
+    | "system"
+    | "compaction_summary"
+    | "system_notice"
+    | "contextual_user"
+    | "forked";
   content: SessionHistoryContentItem[] | string;
   display_content?: SessionHistoryContentItem[] | string;
   reasoning_content?: string | null;
   rewritten_from?: string | null;
   timestamp?: string | null;
+  turn_n?: number | null;
   tool_calls?: Array<{
     id: string;
     type: "function";

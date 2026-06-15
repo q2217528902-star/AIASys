@@ -110,7 +110,7 @@ const KIND_FILTERS = [
   { id: "all", label: "全部" },
   { id: "skill_pack", label: "技能" },
   { id: "mcp_server", label: "连接器" },
-  { id: "subagent", label: "专家协作节点" },
+  { id: "subagent", label: "专家" },
 ] as const;
 
 const STATUS_FILTERS = [
@@ -245,7 +245,7 @@ export function CapabilityPanel({ workspaceId, scope = "workspace", mode = "full
 
   const isWorkspaceCap = (cap: unknown): cap is WorkspaceCapabilityItem =>
     typeof cap === "object" && cap !== null && "enabled" in cap;
-  const canToggle = (cap: WorkspaceCapabilityItem) => cap.kind !== "skill_pack";
+  const canToggle = (_cap: WorkspaceCapabilityItem) => true;
 
   const handleInstall = async (capId: string, config?: Record<string, unknown>) => {
     setProcessingId(capId);
@@ -477,6 +477,7 @@ export function CapabilityPanel({ workspaceId, scope = "workspace", mode = "full
             size="sm"
             variant="outline"
             className="h-7 gap-1 text-[11px]"
+            data-testid="capability-panel-new-expert"
             onClick={() => setRolesMarketOpen(true)}
           >
             <Plus className="h-3 w-3" />
@@ -527,7 +528,7 @@ export function CapabilityPanel({ workspaceId, scope = "workspace", mode = "full
           {filteredItems.map((cap) => {
             const capId = cap.capability_id;
             const ws = isWorkspaceCap(cap);
-            const status = ws ? cap.status : "available";
+            const status = ws ? (cap.enabled ? cap.status : "disabled") : "available";
             const active = selectedCap?.capability_id === capId;
             return (
               <div

@@ -3,6 +3,18 @@ const net = require("net");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 
+const {
+  resolveNpmCommand,
+  validatePythonExecutable,
+  getVenvSitePackages,
+  fixPyvenvHomeIfNeeded,
+  canReuseService: canReuseServiceUtil,
+  resolveDesiredPort: resolveDesiredPortUtil,
+  probeFreePort,
+  findAvailablePort,
+  probeUrl,
+} = require("./utils.cjs");
+
 const HOST = process.env.AIASYS_DESKTOP_HOST || "127.0.0.1";
 const DEFAULT_FRONTEND_PORT = 13010;
 const DEFAULT_BACKEND_PORT = 13011;
@@ -25,70 +37,25 @@ function resolveRepoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
-function fixPyvenvHomeIfNeeded(backendRoot) {
-  const pyvenvPath = path.join(backendRoot, ".venv", "pyvenv.cfg");
-  if (!fs.existsSync(pyvenvPath)) {
-    return;
-  }
-  const embedPythonDir = path.join(backendRoot, ".venv", "python");
-  if (!fs.existsSync(embedPythonDir)) {
-    return;
-  }
-
-  let content;
-  try {
-    content = fs.readFileSync(pyvenvPath, "utf-8");
-  } catch {
-    return;
+/**
+ * 将 AppImage 只读目录中的 .venv 复制到可写运行时目录，
+ * 然后修复 pyvenv.cfg 和符号链接。
+ */
+function preparePackagedVenv(backendRoot, runtimeStateRoot) {
+  const writableVenv = path.join(runtimeStateRoot, ".venv");
+  if (fs.existsSync(writableVenv)) {
+    return; // 已复制过，直接复用
   }
 
-  const homeMatch = content.match(/^home\s*=\s*(.+)$/m);
-  const currentHome = homeMatch ? homeMatch[1].trim() : null;
-  const expectedHome = embedPythonDir;
-
-  // 如果 home 已经正确，无需修改
-  if (currentHome && path.resolve(currentHome) === path.resolve(expectedHome)) {
+  const readOnlyVenv = path.join(backendRoot, ".venv");
+  if (!fs.existsSync(readOnlyVenv)) {
     return;
   }
 
-  // 如果当前 home 指向的路径不存在，或不是嵌入目录，则修复
-  if (!currentHome || !fs.existsSync(currentHome)) {
-    const newContent = content.replace(/^home\s*=\s*.+$/m, `home = ${expectedHome}`);
-    try {
-      fs.writeFileSync(pyvenvPath, newContent, "utf-8");
-      console.log(`[aiasys-desktop] 已修复 pyvenv.cfg home 路径: ${expectedHome}`);
-    } catch (error) {
-      console.warn("[aiasys-desktop] 修复 pyvenv.cfg 失败:", error);
-    }
-  }
-
-  // 修复 .venv/bin/python 符号链接，使其指向嵌入的 Python
-  const venvBinDir = path.join(backendRoot, ".venv", "bin");
-  const embedBinDir = path.join(embedPythonDir, "bin");
-  if (fs.existsSync(venvBinDir) && fs.existsSync(embedBinDir)) {
-    for (const name of ["python", "python3"]) {
-      const linkPath = path.join(venvBinDir, name);
-      let isSymlink = false;
-      try {
-        isSymlink = fs.lstatSync(linkPath).isSymbolicLink();
-      } catch {
-        continue;
-      }
-      if (!isSymlink) continue;
-
-      const target = fs.readlinkSync(linkPath);
-      const needsFix = path.isAbsolute(target) || !fs.existsSync(linkPath);
-      if (!needsFix) continue;
-
-      const embedPython = path.join(embedBinDir, name);
-      if (!fs.existsSync(embedPython)) continue;
-
-      fs.unlinkSync(linkPath);
-      const relativeTarget = path.relative(venvBinDir, embedPython);
-      fs.symlinkSync(relativeTarget, linkPath);
-      console.log(`[aiasys-desktop] 已修复 venv 符号链接: ${name} -> ${relativeTarget}`);
-    }
-  }
+  console.log(`[aiasys-desktop] 复制 .venv 到可写目录: ${writableVenv}`);
+  fs.cpSync(readOnlyVenv, writableVenv, { recursive: true, dereference: true });
+  fixPyvenvHomeIfNeeded(writableVenv);
+  console.log(`[aiasys-desktop] .venv 就绪（可写副本）`);
 }
 
 function resolvePythonExecutable(backendRoot) {
@@ -101,16 +68,29 @@ function resolvePythonExecutable(backendRoot) {
           path.join(backendRoot, ".venv", "Scripts", "python"),
         ]
       : [
-          // 优先使用嵌入的完整 Python 运行时
-          path.join(backendRoot, ".venv", "python", "bin", "python"),
-          path.join(backendRoot, ".venv", "python", "bin", "python3"),
-          path.join(backendRoot, ".venv", "bin", "python"),
+          // macOS/Linux: 优先使用 venv 入口点（.venv/bin/python3）
+          // venv 入口点能找到 pyvenv.cfg，从而正确加载 site-packages。
+          // 嵌入 Python（.venv/python/bin/python3）直接启动会找不到 site-packages。
           path.join(backendRoot, ".venv", "bin", "python3"),
+          path.join(backendRoot, ".venv", "bin", "python"),
+          // fallback: 嵌入的完整 Python 运行时
+          path.join(backendRoot, ".venv", "python", "bin", "python3"),
+          path.join(backendRoot, ".venv", "python", "bin", "python"),
         ];
 
   for (const candidate of platformCandidates) {
     if (fs.existsSync(candidate)) {
-      return candidate;
+      const validation = validatePythonExecutable(candidate);
+      if (validation.ok) {
+        console.log(`[aiasys-desktop] Python 解释器验证通过: ${candidate} (${validation.version})`);
+        return candidate;
+      }
+      console.warn(
+        `[aiasys-desktop] Python 解释器存在但无法执行: ${candidate}\n` +
+          `  错误: ${validation.error}\n` +
+          `  提示: macOS/Linux 上请使用 "uv python install 3.12" 安装 python-build-standalone，` +
+          `避免使用依赖系统框架的 Python 发行版。`,
+      );
     }
   }
 
@@ -160,51 +140,6 @@ function resolvePythonExecutable(backendRoot) {
   );
 }
 
-function resolveNpmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
-}
-
-async function probeUrl(url) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 1500);
-
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      redirect: "manual",
-    });
-    return response.ok || response.status === 304;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function probeFreePort(host, port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", () => resolve(false));
-    server.listen(port, host, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
-async function findAvailablePort(host, startPort, excludePorts = []) {
-  const blocked = new Set(excludePorts);
-  for (let candidate = startPort; candidate < startPort + 200; candidate += 1) {
-    if (blocked.has(candidate)) {
-      continue;
-    }
-    if (await probeFreePort(host, candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(`无法为 desktop 找到可用端口，起始端口: ${startPort}`);
-}
 
 /**
  * 读取监听指定端口的进程信息。
@@ -221,10 +156,10 @@ function readListeningProcessUnix(port) {
   const lsofResult = spawnSync(
     "lsof",
     ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", timeout: 5000 },
   );
 
-  if (lsofResult.status !== 0) {
+  if (lsofResult.status !== 0 || lsofResult.error) {
     return null;
   }
 
@@ -322,72 +257,7 @@ function readListeningProcessWindows(port) {
   };
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
-function commandIncludesPath(command, expectedPath) {
-  const normalizedPath = expectedPath.replace(/[\\/]+$/, "");
-  const pattern = new RegExp(`${escapeRegExp(normalizedPath)}(?:[\\\\/\\s'"]|$)`);
-  return pattern.test(command);
-}
-
-async function canReuseService({ url, port, label, expectedPaths }) {
-  const processInfo = readListeningProcess(port);
-  const healthy = await probeUrl(url);
-
-  if (!healthy) {
-    if (!processInfo) {
-      return {
-        reusable: false,
-        reason: "not_running",
-        processInfo: null,
-      };
-    }
-
-    if (!processInfo.command) {
-      return {
-        reusable: false,
-        reason: "occupied_unknown",
-        processInfo,
-      };
-    }
-
-    const belongsToCurrentCheckout = expectedPaths.some((expectedPath) =>
-      commandIncludesPath(processInfo.command, expectedPath),
-    );
-    return {
-      reusable: false,
-      reason: belongsToCurrentCheckout ? "occupied_current" : "occupied_foreign",
-      processInfo,
-    };
-  }
-
-  if (!processInfo || !processInfo.command) {
-    return {
-      reusable: true,
-      reason: "healthy_unknown",
-      processInfo,
-    };
-  }
-
-  const belongsToCurrentCheckout = expectedPaths.some((expectedPath) =>
-    commandIncludesPath(processInfo.command, expectedPath),
-  );
-  if (belongsToCurrentCheckout) {
-    return {
-      reusable: true,
-      reason: "healthy_current",
-      processInfo,
-    };
-  }
-
-  return {
-    reusable: false,
-    reason: "healthy_foreign",
-    processInfo,
-  };
-}
 
 /**
  * 等待 URL 就绪，同时监控子进程是否已崩溃退出。
@@ -614,6 +484,120 @@ class DesktopServiceManager {
     return path.join(logsDir, `${name}-spawn.log`);
   }
 
+  /**
+   * 返回可用的 .venv 根目录。
+   * AppImage 只读环境下指向 runtimeStateRoot 下的可写副本，
+   * 其他环境直接使用 backendRoot。
+   */
+  _getVenvRoot() {
+    // 构建时已按平台修复 pyvenv.cfg / dylib / shebang
+    // 运行时：Linux AppImage 的 squashfs 只读，需复制 .venv 到可写目录；
+    // macOS / Windows 文件系统可写，直接使用 backendRoot。
+    if (this.isPackaged && process.platform === "linux") {
+      return this.runtimeStateRoot;
+    }
+    return this.backendRoot;
+  }
+
+  /**
+   * 构建 Python 子进程的环境变量。
+   * 自动注入 PYTHONPATH 指向 venv 的 site-packages，
+   * 作为 venv 机制失效时的兜底保障（尤其 macOS 嵌入 Python 场景）。
+   */
+  _buildPythonEnv(extraEnv = {}) {
+    const env = {
+      ...process.env,
+      PYTHONUNBUFFERED: "1",
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUTF8: "1",
+    };
+
+    // 清除可能干扰嵌入 Python 的虚拟环境变量
+    delete env.VIRTUAL_ENV;
+    delete env.PYTHONHOME;
+
+    const sitePackages = getVenvSitePackages(this._getVenvRoot());
+    if (sitePackages) {
+      const sep = process.platform === "win32" ? ";" : ":";
+      const existing = process.env.PYTHONPATH || "";
+      env.PYTHONPATH = existing ? `${sitePackages}${sep}${existing}` : sitePackages;
+      console.log(`[aiasys-desktop] PYTHONPATH: ${sitePackages}`);
+    }
+
+    return { ...env, ...extraEnv };
+  }
+
+  /**
+   * 构建 backend 子进程环境变量，附加桌面模式标识。
+   */
+  _bundledUvPath() {
+    if (!this.backendRoot) {
+      return null;
+    }
+    const platformDirMap = {
+      "darwin-arm64": "darwin-arm64",
+      "darwin-x64": "darwin-x64",
+      "linux-arm64": "linux-arm64",
+      "linux-x64": "linux-x64",
+      "win32-x64": "windows-x64",
+    };
+    const key = `${process.platform}-${process.arch}`;
+    const dir = platformDirMap[key];
+    if (!dir) {
+      console.warn(`[aiasys-desktop] 未支持的内置 uv 平台: ${key}`);
+      return null;
+    }
+    const uvName = process.platform === "win32" ? "uv.exe" : "uv";
+    return path.join(this.backendRoot, "vendor", "uv", dir, uvName);
+  }
+
+  _bundledFnmPath() {
+    if (!this.backendRoot) {
+      return null;
+    }
+    const platformDirMap = {
+      "darwin-arm64": "darwin-arm64",
+      "darwin-x64": "darwin-x64",
+      "linux-arm64": "linux-arm64",
+      "linux-x64": "linux-x64",
+      "win32-x64": "win-x64",
+    };
+    const key = `${process.platform}-${process.arch}`;
+    const dir = platformDirMap[key];
+    if (!dir) {
+      console.warn(`[aiasys-desktop] 未支持的内置 fnm 平台: ${key}`);
+      return null;
+    }
+    const fnmName = process.platform === "win32" ? "fnm.exe" : "fnm";
+    return path.join(this.backendRoot, "vendor", "node", dir, fnmName);
+  }
+
+  _fnmDataDir() {
+    if (this.runtimeStateRoot) {
+      return path.join(this.runtimeStateRoot, "fnm");
+    }
+    if (this.backendRoot) {
+      return path.join(this.backendRoot, "fnm");
+    }
+    return null;
+  }
+
+  buildBackendEnv(extraEnv = {}) {
+    const bundledUv = this._bundledUvPath();
+    const bundledUvEnv = bundledUv ? { AIASYS_BUNDLED_UV_PATH: bundledUv } : {};
+    const bundledFnm = this._bundledFnmPath();
+    const bundledFnmEnv = bundledFnm ? { AIASYS_BUNDLED_FNM_PATH: bundledFnm } : {};
+    const fnmDataDir = this._fnmDataDir();
+    const fnmDataEnv = fnmDataDir ? { AIASYS_FNM_DIR: fnmDataDir } : {};
+    return this._buildPythonEnv({
+      AIASYS_DESKTOP_MODE: "1",
+      ...bundledUvEnv,
+      ...bundledFnmEnv,
+      ...fnmDataEnv,
+      ...extraEnv,
+    });
+  }
+
   async resolveDesiredPort({
     requestedPort,
     locked,
@@ -622,55 +606,19 @@ class DesktopServiceManager {
     urlFactory,
     excludePorts = [],
   }) {
-    const inspection = await canReuseService({
-      url: urlFactory(requestedPort),
-      port: requestedPort,
+    return resolveDesiredPortUtil({
+      requestedPort,
+      locked,
       label,
       expectedPaths,
-    });
-
-    if (inspection.reusable) {
-      return {
-        port: requestedPort,
-        reuse: true,
-      };
-    }
-
-    if (inspection.reason === "not_running") {
-      return {
-        port: requestedPort,
-        reuse: false,
-      };
-    }
-
-    const processCommand =
-      inspection.processInfo?.command ||
-      `pid=${inspection.processInfo?.pid || "unknown"}`;
-
-    if (inspection.reason === "occupied_current") {
-      throw new Error(
-        `${label} 端口 ${requestedPort} 上存在当前 checkout 的异常进程，但健康检查未通过: ${processCommand}`,
-      );
-    }
-
-    if (locked) {
-      throw new Error(
-        `${label} 端口 ${requestedPort} 已被占用，且当前通过环境变量锁定了该端口: ${processCommand}`,
-      );
-    }
-
-    const fallbackPort = await findAvailablePort(
-      this.host,
-      requestedPort + 1,
+      urlFactory,
       excludePorts,
-    );
-    console.warn(
-      `[aiasys-desktop] ${label} 端口 ${requestedPort} 不可直接复用，自动切换到 ${fallbackPort}: ${processCommand}`,
-    );
-    return {
-      port: fallbackPort,
-      reuse: false,
-    };
+      host: this.host,
+      findAvailablePort,
+      canReuseService: canReuseServiceUtil,
+      readListeningProcess,
+      probeUrl,
+    });
   }
 
   async start() {
@@ -689,9 +637,12 @@ class DesktopServiceManager {
   async ensureBackend() {
     this.preparePackagedRuntimeState();
 
-    // 打包环境：修复 pyvenv.cfg 的 home 路径为嵌入目录
-    // 避免 venv 的 python 符号链接指向 runner 上的原始路径
-    if (this.isPackaged) {
+    // 构建时已按平台修复（dylib/shebang/pyvenv.cfg）。
+    // 运行时：Linux AppImage squashfs 只读，需复制 .venv 到可写目录；
+    // macOS / Windows 文件系统可写，原地修复即可。
+    if (this.isPackaged && process.platform === "linux") {
+      preparePackagedVenv(this.backendRoot, this.runtimeStateRoot);
+    } else if (this.isPackaged) {
       fixPyvenvHomeIfNeeded(this.backendRoot);
     }
 
@@ -710,7 +661,7 @@ class DesktopServiceManager {
       return;
     }
 
-    const pythonExecutable = resolvePythonExecutable(this.backendRoot);
+    const pythonExecutable = resolvePythonExecutable(this._getVenvRoot());
     console.log("[aiasys-desktop] 启动 backend ...");
     const child = spawnManagedProcess(
       "backend",
@@ -718,13 +669,9 @@ class DesktopServiceManager {
       ["-m", "uvicorn", "app.main:app", "--host", this.host, "--port", String(this.backendPort)],
       {
         cwd: this.backendRoot,
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: "1",
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
+        env: this.buildBackendEnv({
           AIASYS_RUNTIME_ROOT: this.runtimeStateRoot || this.backendRoot,
-        },
+        }),
         __logFilePath: this.getLogFilePath("backend"),
       },
     );
@@ -752,22 +699,18 @@ class DesktopServiceManager {
     if (this.mode === "preview") {
       this.ensureBuiltRenderer();
       console.log("[aiasys-desktop] 启动 preview frontend ...");
-      const pythonExecutable = resolvePythonExecutable(this.backendRoot);
+      const pythonExecutable = resolvePythonExecutable(this._getVenvRoot());
       const child = spawnManagedProcess(
         "frontend-preview",
         pythonExecutable,
         [path.join(this.webRoot, "scripts", "committed", "local_preview_server.py")],
         {
           cwd: this.webRoot,
-          env: {
-            ...process.env,
-            PYTHONUNBUFFERED: "1",
-            PYTHONIOENCODING: "utf-8",
-            PYTHONUTF8: "1",
+          env: this._buildPythonEnv({
             AIASYS_PREVIEW_HOST: this.host,
             AIASYS_PREVIEW_PORT: String(this.frontendPort),
             AIASYS_PREVIEW_BACKEND_URL: this.backendBaseUrl,
-          },
+          }),
           __logFilePath: this.getLogFilePath("frontend"),
         },
       );

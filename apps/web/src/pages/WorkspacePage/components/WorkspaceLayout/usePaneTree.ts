@@ -4,6 +4,7 @@ import {
   createWorkspacePreviewFile,
 } from "@/utils/workspaceFiles";
 import { WORKSPACE_FILE_DRAG_MIME } from "@/components/CanvasEditor/canvasUtils";
+import type { WorkspaceFileReferenceDragPayload } from "@/utils/workspaceFileDrag";
 import type { PreviewFile } from "@/components/layout/WorkspaceSidebar/preview";
 import type { GlobalResourceNode } from "@/components/layout/WorkspaceSidebar/assetPreviewFactory";
 import { type WorkspaceTab } from "./components/WorkspaceTabBar";
@@ -134,6 +135,35 @@ export function usePaneTree(
     });
   }, [activeLeafId]);
 
+  const openBrowserTab = useCallback((url: string) => {
+    setPaneTree((current) => {
+      const targetLeafId = findLeaf(current, activeLeafId)
+        ? activeLeafId
+        : (getAllLeafIds(current)[0] ?? "main");
+      const leaf = findLeaf(current, targetLeafId);
+      if (!leaf) return current;
+      const existingTab = leaf.tabs.find((t) => t.url === url);
+      if (existingTab) {
+        setActiveLeafId(targetLeafId);
+        return updateLeaf(current, targetLeafId, (l) => ({
+          ...l,
+          activeTabId: existingTab.id,
+        }));
+      }
+      const tabId = `browser:${url}:${Date.now()}`;
+      const newTab: WorkspaceTab = {
+        id: tabId,
+        url,
+      };
+      setActiveLeafId(targetLeafId);
+      return updateLeaf(current, targetLeafId, (l) => ({
+        ...l,
+        tabs: [...l.tabs, newTab],
+        activeTabId: newTab.id,
+      }));
+    });
+  }, [activeLeafId]);
+
   const openDatabaseQueryTab = useCallback((databaseHandle: string) => {
     setPaneTree((current) => {
       const targetLeafId = findLeaf(current, activeLeafId)
@@ -189,6 +219,40 @@ export function usePaneTree(
       const newTab: WorkspaceTab = {
         id: `capability-detail:${capabilityId}:${Date.now()}`,
         capabilityDetail: { workspaceId: targetWorkspaceId, capabilityId, displayName },
+      };
+      setActiveLeafId(targetLeafId);
+      return updateLeaf(current, targetLeafId, (l) => ({
+        ...l,
+        tabs: [...l.tabs, newTab],
+        activeTabId: newTab.id,
+      }));
+    });
+  }, [activeLeafId]);
+
+  const openRuntimeTab = useCallback(() => {
+    setPaneTree((current) => {
+      const targetLeafId = findLeaf(current, activeLeafId)
+        ? activeLeafId
+        : (getAllLeafIds(current)[0] ?? "main");
+      const leaf = findLeaf(current, targetLeafId);
+      if (!leaf) return current;
+      const allLeafIds = getAllLeafIds(current);
+      const existingTab = allLeafIds
+        .map((leafId) => findLeaf(current, leafId))
+        .flatMap((currentLeaf) => currentLeaf?.tabs ?? [])
+        .find((tab) => tab.runtime);
+      if (existingTab) {
+        const existingLeaf = findLeafWithTab(current, existingTab.id);
+        const existingLeafId = existingLeaf?.id ?? targetLeafId;
+        setActiveLeafId(existingLeafId);
+        return updateLeaf(current, existingLeafId, (l) => ({
+          ...l,
+          activeTabId: existingTab.id,
+        }));
+      }
+      const newTab: WorkspaceTab = {
+        id: `runtime:${Date.now()}`,
+        runtime: true,
       };
       setActiveLeafId(targetLeafId);
       return updateLeaf(current, targetLeafId, (l) => ({
@@ -490,7 +554,19 @@ export function usePaneTree(
         return;
       }
 
-      const fileName = e.dataTransfer.getData(WORKSPACE_FILE_DRAG_MIME);
+      const rawPayload = e.dataTransfer.getData(WORKSPACE_FILE_DRAG_MIME);
+      let fileName = "";
+      if (rawPayload) {
+        try {
+          const payload = JSON.parse(
+            rawPayload,
+          ) as WorkspaceFileReferenceDragPayload;
+          fileName = payload.paths[0] ?? "";
+        } catch {
+          // 兼容旧字符串格式
+          fileName = rawPayload;
+        }
+      }
       if (fileName) {
         const previewFile = buildWorkspacePreviewFile(fileName);
         const newTab: WorkspaceTab = {
@@ -556,8 +632,10 @@ export function usePaneTree(
     openWorkspaceFileTarget,
     openSubagentDetailTab,
     openTerminalTab,
+    openBrowserTab,
     openDatabaseQueryTab,
     openCapabilityDetailTab,
+    openRuntimeTab,
     handleOpenGlobalResource,
     activateWorkspaceTab,
     closeWorkspaceTab,

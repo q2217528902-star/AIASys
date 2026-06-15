@@ -3,8 +3,10 @@ import {
   ChevronDown,
   ChevronRight,
   Server,
+  BarChart3,
   Braces,
   FolderCog,
+  Globe,
   Puzzle,
   Zap,
   Terminal,
@@ -30,13 +32,15 @@ export type SettingsSection =
   | "llm"
   | "env-vars"
   | "storage"
+  | "uv-mirror"
   | "capabilities"
   | "tool-strategy"
   | "execution-resources"
   | "auto-tasks"
   | "monitor-tasks"
   | "template-management"
-  | "template-market";
+  | "template-market"
+  | "token-usage";
 
 interface NavGroup {
   id: string;
@@ -63,8 +67,9 @@ const NAV_GROUPS: NavGroup[] = [
     children: [
       { id: "llm", label: "模型配置", icon: <Server className="h-4 w-4" /> },
       { id: "env-vars", label: "全局环境变量", icon: <Braces className="h-4 w-4" /> },
+      { id: "uv-mirror", label: "uv 包管理器镜像", icon: <Globe className="h-4 w-4" /> },
       { id: "storage", label: "存储位置", icon: <FolderCog className="h-4 w-4" /> },
-      { id: "execution-resources", label: "Python 与执行资源", icon: <FlaskConical className="h-4 w-4" /> },
+      { id: "execution-resources", label: "执行资源", icon: <FlaskConical className="h-4 w-4" /> },
     ],
   },
   {
@@ -77,10 +82,17 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "templates",
-    label: "模板",
+    label: "模板中心",
     children: [
       { id: "template-market", label: "模板市场", icon: <Store className="h-4 w-4" /> },
       { id: "template-management", label: "模板管理", icon: <LayoutTemplate className="h-4 w-4" /> },
+    ],
+  },
+  {
+    id: "insights",
+    label: "统计与用量",
+    children: [
+      { id: "token-usage", label: "Token 消耗", icon: <BarChart3 className="h-4 w-4" /> },
     ],
   },
 ];
@@ -104,6 +116,11 @@ const SECTION_META: Record<
     description: "配置新建工作区、全局资源和日志的默认落盘位置",
     icon: FolderCog,
   },
+  "uv-mirror": {
+    title: "uv 包管理器镜像",
+    description: "配置 PyPI、Python 二进制和 uv 安装器的国内镜像源",
+    icon: Globe,
+  },
   capabilities: {
     title: "能力管理",
     description: "统一管理技能、连接器和协作专家的安装、启用与禁用",
@@ -115,8 +132,8 @@ const SECTION_META: Record<
     icon: Zap,
   },
   "execution-resources": {
-    title: "Python 与执行资源",
-    description: "管理 Python 环境、Docker 容器和注入变量",
+    title: "执行资源",
+    description: "管理 Python、Node.js、Docker 容器和注入变量",
     icon: FlaskConical,
   },
   "auto-tasks": {
@@ -138,6 +155,11 @@ const SECTION_META: Record<
     title: "模板市场",
     description: "浏览和安装系统内置模板",
     icon: Store,
+  },
+  "token-usage": {
+    title: "Token 消耗",
+    description: "查看跨会话的 LLM Token 消耗趋势与热力图",
+    icon: BarChart3,
   },
 };
 
@@ -166,7 +188,7 @@ export function GlobalSettingsDialog({
 }: GlobalSettingsDialogProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    () => new Set(["env", "market", "tasks", "templates"])
+    () => new Set(["env", "market", "tasks", "templates", "insights"])
   );
   const [searchQuery, setSearchQuery] = useState("");
   const navRef = useRef<HTMLElement>(null);
@@ -320,6 +342,7 @@ export function GlobalSettingsDialog({
         aria-modal="true"
         aria-labelledby="global-settings-title"
         aria-describedby="global-settings-desc"
+        data-testid="global-settings-dialog"
       >
         <span id="global-settings-title" className="sr-only">
           全局控制面板
@@ -392,6 +415,7 @@ export function GlobalSettingsDialog({
                             <button
                               key={child.id}
                               type="button"
+                              data-testid={`global-settings-nav-${child.id}`}
                               onClick={() => !isDisabled && handleSelectSection(child.id)}
                               disabled={isDisabled}
                               aria-current={activeSection === child.id ? "page" : undefined}
@@ -404,7 +428,7 @@ export function GlobalSettingsDialog({
                               )}
                             >
                               {activeSection === child.id && (
-                                <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-tertiary" />
+                                <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
                               )}
                               {child.icon}
                               <span>{child.label}</span>
@@ -415,7 +439,7 @@ export function GlobalSettingsDialog({
                               <TooltipTrigger asChild>
                                 <span className="block">{button}</span>
                               </TooltipTrigger>
-                              <TooltipContent>需要登录</TooltipContent>
+                              <TooltipContent>登录后可配置全局环境变量</TooltipContent>
                             </Tooltip>
                           ) : (
                             button
@@ -521,6 +545,16 @@ const LazyTemplateMarketPanel = lazy(() =>
     default: m.TemplateMarketPanel,
   }))
 );
+const LazyUvMirrorSettings = lazy(() =>
+  import("@/components/settings/UvMirrorSettings").then((m) => ({
+    default: m.UvMirrorSettings,
+  }))
+);
+const LazyTokenUsagePanel = lazy(() =>
+  import("@/components/settings/token-usage/TokenUsagePanel").then((m) => ({
+    default: m.TokenUsagePanel,
+  }))
+);
 
 function ContentFallback() {
   return (
@@ -598,6 +632,14 @@ function GlobalSettingsContent({ section, workspaceId, workspaceTitle, userId, w
           </Suspense>
         </div>
       );
+    case "uv-mirror":
+      return (
+        <div className="h-full">
+          <Suspense fallback={<ContentFallback />}>
+            <LazyUvMirrorSettings />
+          </Suspense>
+        </div>
+      );
     case "auto-tasks":
       return (
         <div className="h-full">
@@ -643,6 +685,14 @@ function GlobalSettingsContent({ section, workspaceId, workspaceTitle, userId, w
         <div className="h-full">
           <Suspense fallback={<ContentFallback />}>
             <LazyTemplateMarketPanel />
+          </Suspense>
+        </div>
+      );
+    case "token-usage":
+      return (
+        <div className="h-full overflow-y-auto">
+          <Suspense fallback={<ContentFallback />}>
+            <LazyTokenUsagePanel embedded />
           </Suspense>
         </div>
       );

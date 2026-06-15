@@ -10,6 +10,11 @@ if TYPE_CHECKING:
 
     from .ask_user.tool import AskUser
     from .auto_task_signal_tool import AutoTaskSignal
+    from .expert_tools import (
+        ConfigureExpert,
+        InstallExpert,
+        ListSystemExperts,
+    )
     from .auto_task_tool import (
         ControlAutoTask,
         CreateAutoTask,
@@ -100,6 +105,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AiasysTool",
+    "ListSystemExperts",
+    "InstallExpert",
+    "ConfigureExpert",
     "ListSessionNotebooks",
     "ManageNotebook",
     "RunCode",
@@ -109,10 +117,10 @@ __all__ = [
     "ReadFile",
     "WriteFile",
     "StrReplaceFile",
-    "ListEnvVars",
     "GetEnvVar",
     "SetEnvVar",
     "DeleteEnvVar",
+    "ListEnvVars",
     "RuntimeEnvironment",
     "Shell",
     "ListSkills",
@@ -180,6 +188,8 @@ __all__ = [
     "ListMCPServers",
     "SearchMCPMarket",
     "InstallMCPServer",
+    "SearchAvailableConnectors",
+    "InstallConnector",
 ]
 
 
@@ -218,11 +228,11 @@ def __getattr__(name: str) -> Any:
         return import_module(".file_tools", __name__).StrReplaceFile
 
     if name in {
-        "ListEnvVars",
         "GetEnvVar",
         "SetEnvVar",
         "DeleteEnvVar",
-    }:
+        "ListEnvVars",
+    }: 
         module = import_module(".env_vars_tool", __name__)
         return getattr(module, name)
 
@@ -240,6 +250,14 @@ def __getattr__(name: str) -> Any:
         "DisableSkill",
     }:
         module = import_module(".skill_tools", __name__)
+        return getattr(module, name)
+
+    if name in {
+        "ListSystemExperts",
+        "InstallExpert",
+        "ConfigureExpert",
+    }:
+        module = import_module(".expert_tools", __name__)
         return getattr(module, name)
 
     if name in {
@@ -345,6 +363,8 @@ def __getattr__(name: str) -> Any:
         "ListMCPServers",
         "SearchMCPMarket",
         "InstallMCPServer",
+        "SearchAvailableConnectors",
+        "InstallConnector",
     }:
         module = import_module(".mcp_tools", __name__)
         return getattr(module, name)

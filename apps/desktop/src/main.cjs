@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { app, BrowserWindow, dialog, shell, Tray, Menu } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell, Tray, Menu } = require("electron");
 const { DesktopServiceManager } = require("./service-manager.cjs");
 
 const desktopMode =
@@ -37,6 +37,16 @@ if (process.platform === "linux") {
 
 function logError(message, error) {
   console.error(`[aiasys-desktop] ${message}:`, error);
+  try {
+    const logsDir = path.join(app.getPath("userData"), "backend-runtime", "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    const logPath = path.join(logsDir, "electron-main.log");
+    const timestamp = new Date().toISOString();
+    const errorMessage = error instanceof Error ? error.stack || error.message : String(error);
+    fs.appendFileSync(logPath, `[${timestamp}] ERROR: ${message}\n${errorMessage}\n\n`);
+  } catch {
+    // ignore logging failures
+  }
 }
 
 function exitAfterShutdown(code = 0) {
@@ -65,17 +75,35 @@ async function shutdownApp() {
 }
 
 function getWindowIconPath() {
-  const appRoot = app.isPackaged
-    ? path.join(process.resourcesPath, "app.asar")
-    : path.join(__dirname, "..");
   // Windows 使用 .ico 更可靠（任务栏/托盘兼容性更好）
   const iconName = process.platform === "win32" ? "icon.ico" : "icon.png";
+
+  if (app.isPackaged) {
+    // 打包模式下 icon 在 app.asar 内，macOS 原生图像 API 无法从 ASAR 读取，
+    // 需要解出到临时文件
+    const asarIconPath = path.join(process.resourcesPath, "app.asar", "build", iconName);
+    const tempDir = path.join(app.getPath("temp"), "aiasys-icons");
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempIconPath = path.join(tempDir, iconName);
+    if (!fs.existsSync(tempIconPath)) {
+      fs.writeFileSync(tempIconPath, fs.readFileSync(asarIconPath));
+    }
+    return tempIconPath;
+  }
+
+  const appRoot = path.join(__dirname, "..");
   return path.join(appRoot, "build", iconName);
 }
 
 function createMainWindow(rendererBaseUrl) {
   const preloadPath = path.join(__dirname, "preload.cjs");
   const initialUrl = new URL(startPath, rendererBaseUrl).toString();
+  // 把后端地址通过命令行参数注入 renderer，供 preload 暴露给前端。
+  // 这样 WebSocket 等需要直连后端的场景不必依赖页面同源或 preview server 代理。
+  const backendBaseUrl = serviceManager ? serviceManager.backendBaseUrl : "";
+  const additionalArguments = backendBaseUrl
+    ? [`--aiasys-backend-base-url=${backendBaseUrl}`]
+    : [];
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -90,6 +118,7 @@ function createMainWindow(rendererBaseUrl) {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
+      additionalArguments,
     },
   });
 
@@ -225,42 +254,6 @@ function createTray() {
         void shell.openPath(app.getPath("userData"));
       },
     },
-    {
-      label: "打开用户配置",
-      click: () => {
-        // 尝试打开 config.json 所在目录（backend data/config 或 backend 根目录）
-        const configPaths = [
-          path.join(runtimeStateRoot, "data", "config"),
-          path.join(runtimeStateRoot, "data"),
-          path.join(app.getPath("userData"), "backend-runtime", "data", "config"),
-          path.join(app.getPath("userData"), "backend-runtime", "data"),
-        ];
-        for (const configDir of configPaths) {
-          if (fs.existsSync(configDir)) {
-            void shell.openPath(configDir);
-            return;
-          }
-        }
-        // 兜底：打开 userData
-        void shell.openPath(app.getPath("userData"));
-      },
-    },
-    {
-      label: "打开工作区目录",
-      click: () => {
-        const workspacePaths = [
-          path.join(runtimeStateRoot, "data", "workspaces"),
-          path.join(app.getPath("userData"), "backend-runtime", "data", "workspaces"),
-        ];
-        for (const wsDir of workspacePaths) {
-          if (fs.existsSync(wsDir)) {
-            void shell.openPath(wsDir);
-            return;
-          }
-        }
-        void shell.openPath(app.getPath("userData"));
-      },
-    },
     { type: "separator" },
     {
       label: "退出",
@@ -288,16 +281,35 @@ function createTray() {
 }
 
 async function bootstrap() {
+  console.log("[aiasys-desktop] bootstrap start");
+  logError("bootstrap", "bootstrap started");
   serviceManager = new DesktopServiceManager({
     mode: desktopMode,
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     runtimeStateRoot,
   });
+  console.log("[aiasys-desktop] starting backend...");
   const rendererBaseUrl = await serviceManager.start();
+  console.log("[aiasys-desktop] backend started, creating window...");
   createMainWindow(rendererBaseUrl);
+  console.log("[aiasys-desktop] creating tray...");
   createTray();
+  console.log("[aiasys-desktop] bootstrap complete");
 }
+
+// 注册 IPC：选择本地文件夹
+ipcMain.handle("aiasys:select-folder", async (_event, options = {}) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { canceled: true, filePaths: [] };
+  }
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openDirectory"],
+    title: options.title || "选择文件夹",
+    defaultPath: options.defaultPath,
+  });
+  return result;
+});
 
 app.whenReady().then(() => {
   void bootstrap().catch(async (error) => {

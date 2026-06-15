@@ -11,6 +11,16 @@ from app.services.agent.message_content import (
 )
 
 InternalMessageRole = Literal["system", "user", "assistant", "tool"]
+InternalMessageOrigin = Literal[
+    "user",
+    "assistant",
+    "tool",
+    "system",
+    "compaction_summary",
+    "system_notice",
+    "contextual_user",
+    "forked",
+]
 
 
 class InternalToolFunction(TypedDict, total=False):
@@ -31,6 +41,8 @@ class InternalMessage(TypedDict):
     tool_call_id: NotRequired[str]
     tool_calls: NotRequired[list[InternalToolCall]]
     reasoning_content: NotRequired[Any]
+    origin: NotRequired[InternalMessageOrigin]
+    turn_n: NotRequired[int]
 
 
 def normalize_internal_message(message: dict[str, Any]) -> InternalMessage:
@@ -55,6 +67,23 @@ def normalize_internal_message(message: dict[str, Any]) -> InternalMessage:
     if "reasoning_content" in message:
         normalized["reasoning_content"] = message.get("reasoning_content")
 
+    origin = message.get("origin")
+    if origin in (
+        "user",
+        "assistant",
+        "tool",
+        "system",
+        "compaction_summary",
+        "system_notice",
+        "contextual_user",
+        "forked",
+    ):
+        normalized["origin"] = origin
+
+    turn_n = message.get("turn_n")
+    if isinstance(turn_n, int):
+        normalized["turn_n"] = turn_n
+
     return normalized
 
 
@@ -69,11 +98,12 @@ def to_openai_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
         content = message.get("content", "")
 
         if role == "tool":
+            converted_content = message_content_to_openai_input(content)
             converted_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": message.get("tool_call_id", ""),
-                    "content": extract_message_text(content),
+                    "content": converted_content,
                 }
             )
             continue
@@ -110,6 +140,7 @@ def to_anthropic_messages(
             continue
 
         if role == "tool":
+            converted_content = message_content_to_anthropic_input(content)
             anthropic_messages.append(
                 {
                     "role": "user",
@@ -117,7 +148,7 @@ def to_anthropic_messages(
                         {
                             "type": "tool_result",
                             "tool_use_id": message.get("tool_call_id", ""),
-                            "content": extract_message_text(content),
+                            "content": converted_content,
                         }
                     ],
                 }

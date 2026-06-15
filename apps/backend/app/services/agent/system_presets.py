@@ -19,16 +19,19 @@ logger = logging.getLogger(__name__)
 AGENTS_ROOT = Path(__file__).resolve().parents[2] / "agents"
 LOCAL_CONFIG_DIR = AGENTS_ROOT / "local_sandbox_agent_config"
 LOCAL_PRESET_SUFFIX = ".preset"
-LIST_ENV_VARS_TOOL_PATH = "app.agents.tools.env_vars_tool:ListEnvVars"
 GET_ENV_VAR_TOOL_PATH = "app.agents.tools.env_vars_tool:GetEnvVar"
 SET_ENV_VAR_TOOL_PATH = "app.agents.tools.env_vars_tool:SetEnvVar"
 DELETE_ENV_VAR_TOOL_PATH = "app.agents.tools.env_vars_tool:DeleteEnvVar"
+LIST_ENV_VAR_TOOL_PATH = "app.agents.tools.env_vars_tool:ListEnvVars"
 RUNTIME_ENVIRONMENT_TOOL_PATH = "app.agents.tools.runtime_environment_tool:RuntimeEnvironment"
 NOTEBOOK_LIST_TOOL_PATHS: tuple[str, ...] = (
     "app.agents.tools.notebook_session_tool:ListSessionNotebooks",
 )
-# 旧常量保留兼容
-NOTEBOOK_READ_ONLY_TOOL_PATHS = NOTEBOOK_LIST_TOOL_PATHS
+NOTEBOOK_READ_ONLY_TOOL_PATHS: tuple[str, ...] = (
+    *NOTEBOOK_LIST_TOOL_PATHS,
+    "app.agents.tools.notebook_file_tool:ReadNotebook",
+    "app.agents.tools.notebook_session_tool:ReadNotebookOutputs",
+)
 SESSION_TASK_PLAN_TOOL_PATHS: tuple[str, ...] = (
     "app.agents.tools.task_plan_tools:TaskCreateTool",
     "app.agents.tools.task_plan_tools:TaskUpdateTool",
@@ -132,12 +135,12 @@ _ROLE_TYPE_TOOL_MAP: dict[str, tuple[str, ...]] = {
             READ_MEDIA_TOOL_PATH,
             *NOTEBOOK_READ_ONLY_TOOL_PATHS,
             "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
-            LIST_ENV_VARS_TOOL_PATH,
+            "app.agents.tools.code_execution_tool:ListKernelEnvs",
+            "app.agents.tools.code_execution_tool:RegisterKernelEnv",
+            "app.agents.tools.code_execution_tool:RemoveKernelEnv",
             GET_ENV_VAR_TOOL_PATH,
             SET_ENV_VAR_TOOL_PATH,
+            LIST_ENV_VAR_TOOL_PATH,
             DELETE_ENV_VAR_TOOL_PATH,
             # 知识图谱工具
             *KNOWLEDGE_GRAPH_TOOL_PATHS,
@@ -157,15 +160,15 @@ _ROLE_TYPE_TOOL_MAP: dict[str, tuple[str, ...]] = {
             READ_MEDIA_TOOL_PATH,
             *NOTEBOOK_READ_ONLY_TOOL_PATHS,
             "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
+            "app.agents.tools.code_execution_tool:ListKernelEnvs",
+            "app.agents.tools.code_execution_tool:RegisterKernelEnv",
+            "app.agents.tools.code_execution_tool:RemoveKernelEnv",
             "app.agents.tools.file_tools:ReadFile",
             "app.agents.tools.file_tools:WriteFile",
             "app.agents.tools.file_tools:StrReplaceFile",
-            LIST_ENV_VARS_TOOL_PATH,
             GET_ENV_VAR_TOOL_PATH,
             SET_ENV_VAR_TOOL_PATH,
+            LIST_ENV_VAR_TOOL_PATH,
             DELETE_ENV_VAR_TOOL_PATH,
             "app.agents.tools.shell_tool:Shell",
             "app.agents.tools.skill_tools:ListSkills",
@@ -179,41 +182,23 @@ _ROLE_TYPE_TOOL_MAP: dict[str, tuple[str, ...]] = {
         [
             READ_MEDIA_TOOL_PATH,
             *NOTEBOOK_READ_ONLY_TOOL_PATHS,
-            "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
-            LIST_ENV_VARS_TOOL_PATH,
-            GET_ENV_VAR_TOOL_PATH,
-            SET_ENV_VAR_TOOL_PATH,
-            DELETE_ENV_VAR_TOOL_PATH,
+            "app.agents.tools.file_tools:ReadFile",
             *KNOWLEDGE_BASE_READ_TOOL_PATHS,
             *KNOWLEDGE_GRAPH_READ_TOOL_PATHS,
             "app.agents.tools.skill_tools:ListSkills",
             "app.agents.tools.skill_tools:LoadSkill",
             "app.agents.tools.skill_tools:SearchStoreSkills",
-            "app.agents.tools.skill_tools:EnableSkill",
-            "app.agents.tools.skill_tools:DisableSkill",
         ]
     ),
     "reviewer": _canonical_tool_names(
         [
             READ_MEDIA_TOOL_PATH,
             *NOTEBOOK_READ_ONLY_TOOL_PATHS,
-            "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
-            LIST_ENV_VARS_TOOL_PATH,
-            GET_ENV_VAR_TOOL_PATH,
-            SET_ENV_VAR_TOOL_PATH,
-            DELETE_ENV_VAR_TOOL_PATH,
+            "app.agents.tools.file_tools:ReadFile",
             *KNOWLEDGE_BASE_READ_TOOL_PATHS,
             "app.agents.tools.skill_tools:ListSkills",
             "app.agents.tools.skill_tools:LoadSkill",
             "app.agents.tools.skill_tools:SearchStoreSkills",
-            "app.agents.tools.skill_tools:EnableSkill",
-            "app.agents.tools.skill_tools:DisableSkill",
         ]
     ),
     "data_analyst": _canonical_tool_names(
@@ -222,15 +207,15 @@ _ROLE_TYPE_TOOL_MAP: dict[str, tuple[str, ...]] = {
             *NOTEBOOK_READ_ONLY_TOOL_PATHS,
             "app.agents.tools.notebook_tool:ManageNotebook",
             "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
+            "app.agents.tools.code_execution_tool:ListKernelEnvs",
+            "app.agents.tools.code_execution_tool:RegisterKernelEnv",
+            "app.agents.tools.code_execution_tool:RemoveKernelEnv",
             "app.agents.tools.file_tools:ReadFile",
             "app.agents.tools.file_tools:WriteFile",
             "app.agents.tools.file_tools:StrReplaceFile",
-            LIST_ENV_VARS_TOOL_PATH,
             GET_ENV_VAR_TOOL_PATH,
             SET_ENV_VAR_TOOL_PATH,
+            LIST_ENV_VAR_TOOL_PATH,
             DELETE_ENV_VAR_TOOL_PATH,
             RUNTIME_ENVIRONMENT_TOOL_PATH,
             "app.agents.tools.shell_tool:Shell",
@@ -251,6 +236,8 @@ _ROLE_TYPE_TOOL_MAP: dict[str, tuple[str, ...]] = {
             "app.agents.tools.mcp_tools:ListMCPServers",
             "app.agents.tools.mcp_tools:SearchMCPMarket",
             "app.agents.tools.mcp_tools:InstallMCPServer",
+            "app.agents.tools.mcp_tools:SearchAvailableConnectors",
+            "app.agents.tools.mcp_tools:InstallConnector",
             # 数据库工具
             "app.agents.tools.database_query_tool:DatabaseQuery",
             "app.agents.tools.database_query_tool:ListDatabaseConnectors",
@@ -328,12 +315,17 @@ DATA_ANALYST_BASELINE = SystemAgentBaseline(
     baseline_id="data_analyst",
     label="数据分析专家",
     agent_name="aiasys_local_data_analyst",
-    model="kimi-kimi-for-coding",
+    model=None,
     when_to_use="当任务需要执行数据分析、代码实验、Python 脚本运行、notebook 操作、数据可视化或数据库查询时使用。",
     prompt_template_path=LOCAL_CONFIG_DIR / "subagent_data_analyst_prompt.md",
     tool_policy="allowlist",
     mcp_policy="inherit",
     skill_policy="inherit",
+    skills=(
+        "aiasys-notebook-first-skill",
+        "aiasys-data-viz-guide-skill",
+        "aiasys-data-tools-guide-skill",
+    ),
     expert_profile={
         "display_name": "数据分析专家",
         "description": "负责执行数据分析、代码实验、notebook 操作、数据可视化和数据库查询的专业协作节点。",
@@ -359,18 +351,18 @@ CODER_BASELINE = SystemAgentBaseline(
     baseline_id="coder",
     label="代码专家",
     agent_name="aiasys_local_coder",
-    model="kimi-kimi-for-coding",
-    when_to_use="当任务需要结合已有 notebook 输出分析代码问题、梳理实现方案或给主控返回修改建议时使用；当前不直接修改普通文件，也不负责 notebook 写入和运行。",
+    model=None,
+    when_to_use="当任务需要在主控明确授权范围内实现、修改、调试代码，运行构建或测试，并回传可复核结果时使用；不负责 notebook 写入和运行。",
     prompt_template_path=LOCAL_CONFIG_DIR / "subagent_coder_prompt.md",
     tool_policy="allowlist",
     mcp_policy="none",
     skill_policy="inherit",
     expert_profile={
         "display_name": "代码专家",
-        "description": "专注分析代码问题、梳理实现方案和输出修改建议，可只读回看 notebook 输出。",
-        "permissions": _string_list(["read_only", "notebook_read"]),
+        "description": "专注在主控授权范围内实现、修改、调试代码并运行验证，可只读回看 notebook 输出。",
+        "permissions": _string_list(["file_write", "shell", "python", "notebook_read"]),
         "capabilities": _string_list(
-            ["代码问题分析", "实现方案梳理", "修改建议输出", "notebook 输出回看"]
+            ["代码实现", "代码调试", "最小修改", "构建测试", "notebook 输出回看"]
         ),
         "supports_background": True,
     },
@@ -380,7 +372,7 @@ RESEARCHER_BASELINE = SystemAgentBaseline(
     baseline_id="researcher",
     label="研究专家",
     agent_name="aiasys_local_researcher",
-    model="kimi-research",
+    model=None,
     when_to_use="当任务需要检索资料、阅读文档、提炼证据、回看 notebook 输出并给主控提供研究结论时使用。",
     prompt_template_path=LOCAL_CONFIG_DIR / "subagent_researcher_prompt.md",
     tool_policy="allowlist",
@@ -399,7 +391,7 @@ REVIEWER_BASELINE = SystemAgentBaseline(
     baseline_id="reviewer",
     label="审查专家",
     agent_name="aiasys_local_reviewer",
-    model="kimi-kimi-for-coding",
+    model=None,
     when_to_use="当任务需要核对结果、比对差异、回看 notebook 输出、做质量审查或输出风险结论时使用。",
     prompt_template_path=LOCAL_CONFIG_DIR / "subagent_reviewer_prompt.md",
     tool_policy="allowlist",
@@ -427,9 +419,9 @@ DATA_ANALYSIS_BASELINE = SystemAgentBaseline(
             "app.agents.tools.notebook_session_tool:ListSessionNotebooks",
             "app.agents.tools.notebook_tool:ManageNotebook",
             "app.agents.tools.code_execution_tool:RunCode",
-            "app.agents.tools.code_execution_tool:ListKernelEnvsTool",
-            "app.agents.tools.code_execution_tool:RegisterKernelEnvTool",
-            "app.agents.tools.code_execution_tool:RemoveKernelEnvTool",
+            "app.agents.tools.code_execution_tool:ListKernelEnvs",
+            "app.agents.tools.code_execution_tool:RegisterKernelEnv",
+            "app.agents.tools.code_execution_tool:RemoveKernelEnv",
             "app.agents.tools.ask_user.tool:AskUser",
             *SESSION_TASK_PLAN_TOOL_PATHS,
             *AUTO_TASK_TOOL_PATHS,
@@ -441,9 +433,9 @@ DATA_ANALYSIS_BASELINE = SystemAgentBaseline(
             "app.agents.tools.file_tools:ReadFile",
             "app.agents.tools.file_tools:WriteFile",
             "app.agents.tools.file_tools:StrReplaceFile",
-            LIST_ENV_VARS_TOOL_PATH,
             GET_ENV_VAR_TOOL_PATH,
             SET_ENV_VAR_TOOL_PATH,
+            LIST_ENV_VAR_TOOL_PATH,
             DELETE_ENV_VAR_TOOL_PATH,
             RUNTIME_ENVIRONMENT_TOOL_PATH,
             "app.agents.tools.shell_tool:Shell",
@@ -452,14 +444,25 @@ DATA_ANALYSIS_BASELINE = SystemAgentBaseline(
             "app.agents.tools.skill_tools:SearchStoreSkills",
             "app.agents.tools.skill_tools:EnableSkill",
             "app.agents.tools.skill_tools:DisableSkill",
+            "app.agents.tools.expert_tools:ListSystemExperts",
+            "app.agents.tools.expert_tools:InstallExpert",
+            "app.agents.tools.expert_tools:ConfigureExpert",
             "app.agents.tools.mcp_tools:ListMCPServers",
             "app.agents.tools.mcp_tools:SearchMCPMarket",
             "app.agents.tools.mcp_tools:InstallMCPServer",
+            "app.agents.tools.mcp_tools:SearchAvailableConnectors",
+            "app.agents.tools.mcp_tools:InstallConnector",
             "app.agents.tools.database_query_tool:DatabaseQuery",
             "app.agents.tools.database_query_tool:ListDatabaseConnectors",
             "app.agents.tools.database_query_tool:ListDatabaseTables",
             "app.agents.tools.database_query_tool:DescribeDatabaseTable",
         ]
+    ),
+    skill_policy="inherit",
+    skills=(
+        "aiasys-markdown-output-guide-skill",
+        "aiasys-hosting-guide-skill",
+        "aiasys-connector-installer-skill",
     ),
     subagents={
         "data_analyst": SystemSubagentBinding(
@@ -468,7 +471,7 @@ DATA_ANALYSIS_BASELINE = SystemAgentBaseline(
         ),
         "coder": SystemSubagentBinding(
             baseline_id=CODER_BASELINE.baseline_id,
-            description="代码专家，专注分析代码问题、梳理实现方案和输出修改建议",
+            description="代码专家，专注在主控授权范围内实现、修改、调试代码并运行验证",
         ),
         "researcher": SystemSubagentBinding(
             baseline_id=RESEARCHER_BASELINE.baseline_id,
@@ -549,13 +552,18 @@ def resolve_system_agent_preset_from_path(config_path: Path) -> ResolvedSystemPr
 
 def build_system_config_from_preset(preset: ResolvedSystemPreset) -> dict[str, Any]:
     baseline = preset.baseline
+    agent_config: dict[str, Any] = {
+        "name": baseline.agent_name,
+        "model": baseline.model,
+        "tools": list(baseline.tools),
+        "system_prompt_path": str(baseline.prompt_template_path.resolve()),
+    }
+    if baseline.skill_policy:
+        agent_config["skill_policy"] = baseline.skill_policy
+    if baseline.skills:
+        agent_config["skills"] = list(baseline.skills)
     return {
-        "agent": {
-            "name": baseline.agent_name,
-            "model": baseline.model,
-            "tools": list(baseline.tools),
-            "system_prompt_path": str(baseline.prompt_template_path.resolve()),
-        },
+        "agent": agent_config,
         "system_preset_ref": preset.config_ref,
     }
 
@@ -574,6 +582,20 @@ def get_builtin_subagent_seed(name: str) -> SystemAgentBaseline | None:
 
 def list_builtin_subagent_names() -> list[str]:
     return list(_BUILTIN_SUBAGENT_SEEDS.keys())
+
+
+def resolve_builtin_subagent_role_id(name: str) -> str | None:
+    """把 role_id 或显示名解析为内置专家 role_id。无法识别返回 None。"""
+    text = str(name or "").strip()
+    if not text:
+        return None
+    if text in _BUILTIN_SUBAGENT_SEEDS:
+        return text
+    text_lower = text.lower()
+    for role_id, baseline in _BUILTIN_SUBAGENT_SEEDS.items():
+        if baseline.label and baseline.label.strip().lower() == text_lower:
+            return role_id
+    return None
 
 
 def build_subagent_manifest_from_seed(name: str) -> dict[str, Any] | None:

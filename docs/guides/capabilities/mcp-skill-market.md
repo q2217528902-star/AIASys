@@ -18,6 +18,36 @@ MCP Server 按来源分为三类：
 
 系统内置的 MCP Server，随 AIASys 一起部署，不可删除。系统 MCP 提供基础的平台能力。
 
+#### StepFun Search（联网搜索）
+
+AIASys 内置了阶跃星辰的 [StepSearch MCP Server](https://platform.stepfun.com/docs/zh/step-plan/integrations/search-mcp) 作为可安装连接器，需要用户手动安装到工作区后才启用：
+
+- **工具**：`web_search`（全网搜索）、`web_fetch`（网页内容获取）
+- **传输类型**：streamable-http
+- **服务端点**：`https://api.stepfun.com/step_plan/v1/mcp/web_search/mcp`
+- **计费**：`web_search` 每次调用约 0.04 元，与 Step Plan 套餐其他用量叠加；`web_fetch` 不单独计费
+
+**安装与配置方式**：
+
+1. 在"能力管理 → 连接器"（或"能力管理 → 全部/可安装"）中找到 **StepFun Search**，点击"安装"到当前工作区
+2. 从 [阶跃星辰开放平台](https://platform.stepfun.com) 获取 Step Plan 套餐的 API Key（注意与普通按量计费 API Key 可能不同）
+3. 任选一种方式填入：
+   - **环境变量**：启动后端前设置 `export STEPFUN_API_KEY=your-step-plan-key`，安装后的配置中的 `Authorization: Bearer ${STEPFUN_API_KEY}` 会自动解析
+   - **工作区配置**：安装后在"能力管理 → MCP 管理"中找到 `stepfun-search`，编辑 Headers，填入 `Authorization: Bearer your-step-plan-key`
+
+安装前不会自动加载，未配置 API Key 时 MCP Server 会连接失败，不影响其他功能。
+
+### Agent 自动安装连接器
+
+系统内置 Skill `aiasys-connector-installer-skill` 可让 Agent 自主发现并安装连接器：
+
+- `SearchAvailableConnectors`：搜索 AIASys 内置源仓库中的可用连接器
+- `InstallConnector`：将指定连接器安装到当前工作区
+
+启用该 Skill 后，Agent 可以响应"帮我装一个能联网搜索的连接器"这类指令，自动搜索并安装 StepFun Search 等内置连接器。
+
+注意：`InstallConnector` 属于高风险工具，smart 授权模式下会询问用户确认。
+
 ### 自定义 MCP
 
 用户自行添加的 MCP Server。支持两种传输方式：
@@ -106,16 +136,24 @@ Skill 采用全局源仓库 + 工作区副本的两层架构：
 | Skill | 说明 |
 |-------|------|
 | aiasys-platform-skill | 平台操作与运行环境管理 |
+| aiasys-tool-usage-skill | Agent 工具选择与使用指南 |
+| aiasys-markdown-output-guide-skill | 前端特殊 Markdown 输出规范 |
+| aiasys-hosting-guide-skill | 托管控制与托管用户指令规范 |
+| aiasys-notebook-first-skill | Notebook-first 数据分析工作流 |
+| aiasys-data-viz-guide-skill | ECharts、CSV 和图片展示规范 |
+| aiasys-data-tools-guide-skill | 数据库、知识库、知识图谱、多维表和 Canvas 工具指南 |
 | competition-research-skill | 竞赛场景完整工作流（文献检索、论文摄入、实验循环） |
 | competition-parallel-research-skill | 竞赛并行研究执行 |
 | competition-runtime-prep-skill | 竞赛运行环境准备 |
 | skill-creator-skill | Skill 开发工作台（结构、测试、打包、部署） |
+| extension-management-skill | MCP、Skill 和协作专家扩展管理 |
 | arxiv-search-skill | arXiv 论文搜索与下载 |
 | pdf-translate-skill | PDF 保版式翻译 |
 | pymupdf4llm-pdf-to-markdown-skill | PDF 转 Markdown 供 Agent 阅读 |
 | paddleocr-skill | PaddleOCR 文档提取 |
 | aiasys-canvas-skill | AIASys Canvas 对象编辑 |
 | aiasys-memory-organizer-skill | Memory 整理与 consolidation |
+| tabular-data-preview-skill | Excel、CSV 等表格文件结构化预览 |
 | uv-runtime-skill | 当前工作区 UV/Python 运行环境管理 |
 
 ## 访问入口
@@ -130,8 +168,10 @@ Skill 采用全局源仓库 + 工作区副本的两层架构：
 Agent 具备自主管理 MCP 和 Skill 的能力。Agent 可以：
 
 - 搜索市场中的 Skill，根据任务需要推荐安装
-- 安装和配置 Skill
+- 按当前授权模式安装和配置 Skill：manual 模式需逐条确认；smart 模式下内置低风险 Skill 可自动放行，外部来源或含脚本 Skill 仍需确认；auto/full_auto 模式在硬安全边界内自动执行
 - 添加和测试 MCP Server 连接
 - 在会话中启用或禁用 MCP Server
+
+搜索结果只是候选，不会自动变成安装动作。审查、咨询、评估和复盘类请求中，Agent 只会列出候选和推荐理由，不会因为搜到了 Skill 就直接安装。
 
 Agent 的所有管理操作都会记录在执行流中，用户可以随时查看和撤销。

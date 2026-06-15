@@ -137,6 +137,68 @@ class _EchoTool(AiasysTool):
         return ToolResult(content=f"echo: {kwargs['text']}")
 
 
+class _ImageTool(AiasysTool):
+    name = "ImageTool"
+    description = "Return an image"
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def invoke(self, ctx=None, **kwargs):
+        del ctx, kwargs
+        return ToolResult(
+            content=[
+                {"type": "text", "text": "[image:/workspace/chart.png]"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "file:///workspace/chart.png"},
+                    "source_path": "/workspace/chart.png",
+                },
+            ]
+        )
+
+
+class _ImageToolClient:
+    """第一轮调用 ImageTool，第二轮 stop。"""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+
+    async def chat_stream(self, messages, tools, temperature, max_tokens, request_options=None):
+        del tools, temperature, max_tokens, request_options
+        self.calls.append([dict(message) for message in messages])
+        if len(self.calls) == 1:
+            yield LlmChunk(
+                delta=LlmDelta(content="让我看看这张图"),
+                finish_reason=None,
+                usage=None,
+            )
+            yield LlmChunk(
+                delta=LlmDelta(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-img",
+                            "function": {"name": "ImageTool", "arguments": "{}"},
+                        }
+                    ]
+                ),
+                finish_reason="tool_calls",
+                usage={"prompt_tokens": 3, "completion_tokens": 5},
+            )
+            return
+        yield LlmChunk(
+            delta=LlmDelta(content="看到了"),
+            finish_reason="stop",
+            usage={"prompt_tokens": 2, "completion_tokens": 1},
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
 class _McpEchoTool(AiasysTool):
     """模拟 MCP 工具，用于冲突检测测试。"""
 
@@ -198,6 +260,16 @@ def _write_agent_files_with_model(tmp_path: Path, model: str) -> Path:
         encoding="utf-8",
     )
     return agent_file
+
+
+def _contains_data_image(value) -> bool:
+    if isinstance(value, str):
+        return "data:image" in value
+    if isinstance(value, dict):
+        return any(_contains_data_image(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_data_image(item) for item in value)
+    return False
 
 
 def test_backend_model_resolution_falls_back_when_manifest_model_is_not_configured(
@@ -270,7 +342,9 @@ async def test_runtime_session_model_resolution_uses_configured_default_for_requ
 
     events = [event async for event in session.prompt("hello")]
 
-    assert [event.kind for event in events] == ["content", "token_usage"]
+    # _TurnBegin 是 ReAct 轮次内部控制标记，测试时过滤掉
+    public_events = [event for event in events if getattr(event, "kind", None) != "turn_begin"]
+    assert [event.kind for event in public_events] == ["content", "token_usage"]
     assert session._resolve_model_id() == "kimi-kimi-for-coding"
     assert client.request_options[0] is not None
     assert client.request_options[0].thinking_enabled is True
@@ -427,7 +501,9 @@ async def test_aiasys_runtime_session_runs_react_loop(tmp_path):
 
     events = [event async for event in session.prompt("hello")]
 
-    assert [event.kind for event in events] == [
+    # _TurnBegin 是 ReAct 轮次内部控制标记，测试时过滤掉
+    public_events = [event for event in events if getattr(event, "kind", None) != "turn_begin"]
+    assert [event.kind for event in public_events] == [
         "content",
         "content",
         "tool_call",
@@ -435,17 +511,17 @@ async def test_aiasys_runtime_session_runs_react_loop(tmp_path):
         "content",
         "token_usage",
     ]
-    assert events[0].text == "分析中。"
-    assert events[1].content_type == "think"
-    assert events[1].think == "先整理问题，再调用工具。"
-    assert events[2].tool_name == "EchoTool"
-    assert events[2].arguments == {"text": "hello"}
-    assert events[3].content == "echo: hello"
-    assert events[4].text == "最终答案"
+    assert public_events[0].text == "分析中。"
+    assert public_events[1].content_type == "think"
+    assert public_events[1].think == "先整理问题，再调用工具。"
+    assert public_events[2].tool_name == "EchoTool"
+    assert public_events[2].arguments == {"text": "hello"}
+    assert public_events[3].content == "echo: hello"
+    assert public_events[4].text == "最终答案"
     # input_tokens 是多轮 prompt_tokens 的累加
-    assert events[5].input_tokens == sum(u["prompt_tokens"] for u in client.usages)
+    assert public_events[5].input_tokens == sum(u["prompt_tokens"] for u in client.usages)
     # output_tokens 是多轮 completion_tokens 的累加
-    assert events[5].output_tokens == sum(u["completion_tokens"] for u in client.usages)
+    assert public_events[5].output_tokens == sum(u["completion_tokens"] for u in client.usages)
 
     await session.close()
     assert client.closed is True
@@ -524,6 +600,7 @@ async def test_aiasys_runtime_session_downgrades_old_inline_images_before_next_t
                     "test-model": LlmModelConfig(
                         provider="provider-1",
                         model="test-model-remote",
+                        capabilities=["image_in"],
                     )
                 },
             ),
@@ -574,6 +651,154 @@ async def test_aiasys_runtime_session_downgrades_old_inline_images_before_next_t
             "source_path": "/workspace/chart.png",
         },
     ]
+
+
+async def test_aiasys_runtime_session_hydrates_workspace_images_once(tmp_path):
+    (tmp_path / "chart.png").write_bytes(b"fake-image")
+    agent_file = _write_agent_files(tmp_path)
+    registry = ToolRegistry()
+    client = _SingleTurnClient()
+
+    session = AiasysRuntimeSession(
+        RuntimeSessionCreateSpec(
+            work_dir=WorkspacePath(str(tmp_path)),
+            session_id="session-workspace-image",
+            config=AiasysLlmConfig(
+                default_model="test-model",
+                providers={
+                    "provider-1": LlmProviderConfig(
+                        api_key="secret",
+                        base_url="https://example.com/v1",
+                    )
+                },
+                models={
+                    "test-model": LlmModelConfig(
+                        provider="provider-1",
+                        model="test-model-remote",
+                        capabilities=["image_in"],
+                    )
+                },
+            ),
+            agent_file=agent_file,
+            skills_dir=None,
+            mcp_configs=None,
+            yolo=True,
+        ),
+        client,
+        registry,
+    )
+
+    first_turn = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "看看这张图"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "file:///workspace/chart.png"},
+                    "source_path": "/workspace/chart.png",
+                },
+            ],
+        }
+    ]
+
+    _ = [event async for event in session.prompt(first_turn)]
+    _ = [event async for event in session.prompt("第二轮问题")]
+
+    image_user_messages = [
+        message
+        for message in client.calls[0]
+        if message["role"] == "user" and isinstance(message.get("content"), list)
+    ]
+    assert len(image_user_messages) == 1
+    first_image_url = image_user_messages[0]["content"][1]["image_url"]["url"]
+    assert first_image_url.startswith("data:image/png;base64,")
+
+    previous_image_user_messages = [
+        message
+        for message in client.calls[1]
+        if message["role"] == "user" and isinstance(message.get("content"), list)
+    ]
+    assert len(previous_image_user_messages) == 1
+    assert previous_image_user_messages[0]["content"] == [
+        {"type": "text", "text": "看看这张图"},
+        {
+            "type": "image_reference",
+            "source_path": "/workspace/chart.png",
+        },
+    ]
+    assert _contains_data_image(client.calls[1]) is False
+
+    await session.close()
+
+
+async def test_aiasys_runtime_session_downgrades_current_images_for_text_only_model(
+    tmp_path,
+):
+    agent_file = _write_agent_files(tmp_path)
+    registry = ToolRegistry()
+    client = _SingleTurnClient()
+
+    session = AiasysRuntimeSession(
+        RuntimeSessionCreateSpec(
+            work_dir=WorkspacePath(str(tmp_path)),
+            session_id="session-text-only-image",
+            config=AiasysLlmConfig(
+                default_model="test-model",
+                providers={
+                    "provider-1": LlmProviderConfig(
+                        api_key="secret",
+                        base_url="https://example.com/v1",
+                    )
+                },
+                models={
+                    "test-model": LlmModelConfig(
+                        provider="provider-1",
+                        model="test-model-remote",
+                    )
+                },
+            ),
+            agent_file=agent_file,
+            skills_dir=None,
+            mcp_configs=None,
+            yolo=True,
+        ),
+        client,
+        registry,
+    )
+
+    first_turn = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "看看这张图"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
+                    "source_path": "/workspace/chart.png",
+                },
+            ],
+        }
+    ]
+
+    _ = [event async for event in session.prompt(first_turn)]
+
+    image_user_messages = [
+        message
+        for message in client.calls[0]
+        if message["role"] == "user" and isinstance(message.get("content"), list)
+    ]
+    assert len(image_user_messages) == 1
+    assert image_user_messages[0]["content"] == [
+        {"type": "text", "text": "看看这张图"},
+        {
+            "type": "image_reference",
+            "source_path": "/workspace/chart.png",
+        },
+    ]
+    assert _contains_data_image(client.calls[0]) is False
+
+    await session.close()
 
 
 async def test_aiasys_runtime_session_enables_thinking_for_thinking_model(tmp_path):
@@ -936,4 +1161,107 @@ async def test_stream_interrupt_uses_transmitted_fragment(tmp_path):
     assistant_msgs = [m for m in session.messages if m.get("role") == "assistant"]
     assert len(assistant_msgs) >= 1
     assert assistant_msgs[-1].get("content") == "部分输出"
+    await session.close()
+
+
+async def test_tool_result_image_hydrated_for_multimodal_model(tmp_path):
+    """工具返回的图片在多模态模型调用前会被水合成 data URL。"""
+    (tmp_path / "chart.png").write_bytes(b"fake-image")
+    agent_file = _write_agent_files(tmp_path)
+    registry = ToolRegistry()
+    registry.register(_ImageTool())
+    client = _ImageToolClient()
+
+    session = AiasysRuntimeSession(
+        RuntimeSessionCreateSpec(
+            work_dir=WorkspacePath(str(tmp_path)),
+            session_id="session-tool-image-hydrate",
+            config=AiasysLlmConfig(
+                default_model="test-model",
+                providers={
+                    "provider-1": LlmProviderConfig(
+                        api_key="secret",
+                        base_url="https://example.com/v1",
+                    )
+                },
+                models={
+                    "test-model": LlmModelConfig(
+                        provider="provider-1",
+                        model="test-model-remote",
+                        capabilities=["image_in"],
+                    )
+                },
+            ),
+            agent_file=agent_file,
+            skills_dir=None,
+            mcp_configs=None,
+            yolo=True,
+        ),
+        client,
+        registry,
+    )
+
+    events = [event async for event in session.prompt("看看这张图")]
+    assert any(e.kind == "tool_result" for e in events)
+
+    # 第二轮调用（工具结果后）中，tool message 的图片应被水合
+    second_call_messages = client.calls[1]
+    tool_messages = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    tool_content = tool_messages[0].get("content")
+    assert isinstance(tool_content, list)
+    image_parts = [p for p in tool_content if isinstance(p, dict) and p.get("type") == "image_url"]
+    assert len(image_parts) == 1
+    assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    await session.close()
+
+
+async def test_tool_result_image_downgraded_for_text_only_model(tmp_path):
+    """纯文本模型调用前，工具返回的图片会被降级为 image_reference。"""
+    (tmp_path / "chart.png").write_bytes(b"fake-image")
+    agent_file = _write_agent_files(tmp_path)
+    registry = ToolRegistry()
+    registry.register(_ImageTool())
+    client = _ImageToolClient()
+
+    session = AiasysRuntimeSession(
+        RuntimeSessionCreateSpec(
+            work_dir=WorkspacePath(str(tmp_path)),
+            session_id="session-tool-image-text",
+            config=AiasysLlmConfig(
+                default_model="test-model",
+                providers={
+                    "provider-1": LlmProviderConfig(
+                        api_key="secret",
+                        base_url="https://example.com/v1",
+                    )
+                },
+                models={
+                    "test-model": LlmModelConfig(
+                        provider="provider-1",
+                        model="test-model-remote",
+                    )
+                },
+            ),
+            agent_file=agent_file,
+            skills_dir=None,
+            mcp_configs=None,
+            yolo=True,
+        ),
+        client,
+        registry,
+    )
+
+    events = [event async for event in session.prompt("看看这张图")]
+    assert any(e.kind == "tool_result" for e in events)
+
+    second_call_messages = client.calls[1]
+    tool_messages = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    tool_content = tool_messages[0].get("content")
+    assert isinstance(tool_content, list)
+    assert _contains_data_image(tool_content) is False
+    image_ref_parts = [p for p in tool_content if isinstance(p, dict) and p.get("type") == "image_reference"]
+    assert len(image_ref_parts) == 1
+    assert image_ref_parts[0].get("source_path") == "/workspace/chart.png"
     await session.close()

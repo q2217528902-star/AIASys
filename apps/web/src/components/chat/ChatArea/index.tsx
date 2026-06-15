@@ -17,16 +17,19 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { ArrowDown } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChatItem } from "@/pages/WorkspacePage/types";
 import type { PreviewFile } from "@/components/layout/WorkspaceSidebar/preview";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { MessageItem } from "./MessageItem";
 import { AskUserInlineCard } from "@/components/AskUserInlineCard";
+import { CapabilityConfirmationCard } from "@/components/CapabilityConfirmationCard";
 import { askUserBridge } from "@/lib/askUserBridge";
 import type { ChatAreaActions, ChatAreaLayout } from "./context";
 
@@ -55,6 +58,8 @@ interface ChatAreaProps {
   onWorkerClick?: (workerName: string) => void;
   /** 在主画布打开工作区产物 */
   onOpenWorkspaceArtifact?: (file: PreviewFile) => void;
+  /** 在浏览器标签页打开工作区文件 */
+  onOpenInBrowserTab?: (path: string) => void;
   /** 查看工具调用详情 - 包含触发元素位置用于悬浮窗定位 */
   onViewToolDetails?: (
     toolCallId: string,
@@ -86,6 +91,7 @@ function ChatAreaRoot({
   onViewExecutionSpace,
   onWorkerClick,
   onOpenWorkspaceArtifact,
+  onOpenInBrowserTab,
   onViewToolDetails,
   onRewriteUserMessage,
   isRunning = false,
@@ -109,13 +115,24 @@ function ChatAreaRoot({
     lastId: undefined,
     sessionId: undefined,
   });
-  const actions: ChatAreaActions = {
-    onViewExecutionSpace,
-    onWorkerClick,
-    onOpenWorkspaceArtifact,
-    onViewToolDetails,
-    onRewriteUserMessage,
-  };
+  const actions: ChatAreaActions = useMemo(
+    () => ({
+      onViewExecutionSpace,
+      onWorkerClick,
+      onOpenWorkspaceArtifact,
+      onOpenInBrowserTab,
+      onViewToolDetails,
+      onRewriteUserMessage,
+    }),
+    [
+      onViewExecutionSpace,
+      onWorkerClick,
+      onOpenWorkspaceArtifact,
+      onOpenInBrowserTab,
+      onViewToolDetails,
+      onRewriteUserMessage,
+    ],
+  );
   useEffect(() => {
     if (layout === "compact" || layout === "rail" || !containerRef.current) {
       return;
@@ -157,7 +174,7 @@ function ChatAreaRoot({
       programmaticScrollTimerRef.current = window.setTimeout(() => {
         isProgrammaticScrollRef.current = false;
         programmaticScrollTimerRef.current = null;
-      }, behavior === "smooth" ? 450 : 0);
+      }, behavior === "smooth" ? 450 : 50);
 
       if (behavior === "smooth") {
         messagesEndRef?.current?.scrollIntoView({
@@ -235,6 +252,40 @@ function ChatAreaRoot({
     }
   }, [items, scrollToBottom, sessionId]);
 
+  // 监听内容高度变化（如思考过程展开/折叠），若当前在跟随底部则保持滚动到底
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let rafId: number | null = null;
+    let debounceTimer: number | null = null;
+    const observer = new MutationObserver(() => {
+      if (!isFollowingBottomRef.current) return;
+      if (debounceTimer) {
+        window.clearTimeout(debounceTimer);
+      }
+      debounceTimer = window.setTimeout(() => {
+        if (!isFollowingBottomRef.current) return;
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          scrollToBottom("auto");
+        });
+      }, 100);
+    });
+
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+    });
+
+    return () => {
+      observer.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+    };
+  }, [scrollToBottom]);
+
   useEffect(() => {
     return () => {
       if (programmaticScrollTimerRef.current) {
@@ -269,8 +320,8 @@ function ChatAreaRoot({
           className={cn(
             "mx-auto min-w-0",
             isCompactSurface
-              ? "max-w-none space-y-5 pb-20"
-              : "max-w-4xl space-y-8 pb-24",
+              ? "max-w-none pb-24"
+              : "max-w-4xl pb-32",
           )}
         >
           {children || (
@@ -286,13 +337,13 @@ function ChatAreaRoot({
         </div>
       </div>
       {showScrollToBottom && (
-        <div className="pointer-events-none absolute bottom-4 left-0 right-0 z-20 flex justify-center px-4">
+        <div className="pointer-events-none absolute bottom-6 left-0 right-0 z-50 flex justify-center px-4">
           <Button
             type="button"
             data-testid="chat-scroll-to-bottom"
             size="sm"
             variant="secondary"
-            className="pointer-events-auto h-8 rounded-full border border-border bg-background px-3 text-xs shadow-lg hover:bg-muted"
+            className="pointer-events-auto h-8 rounded-full border border-border/80 bg-background px-3 text-xs shadow-[0_4px_20px_rgba(0,0,0,0.12)] backdrop-blur-sm hover:bg-muted"
             onClick={() => scrollToBottom("smooth")}
             title="回到底部"
           >
@@ -314,7 +365,7 @@ interface ChatAreaListProps {
 }
 
 /**
- * ChatArea.List - 消息列表组件
+ * ChatArea.List - 消息列表组件（虚拟滚动）
  */
 function ChatAreaList({
   items,
@@ -323,39 +374,100 @@ function ChatAreaList({
   layout = "default",
   isRunning = false,
 }: ChatAreaListProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () =>
+      wrapperRef.current?.closest('[data-testid="chat-scroll-container"]') ??
+      null,
+    estimateSize: () => 160,
+    measureElement:
+      typeof window !== "undefined" && "ResizeObserver" in window
+        ? (element) => element.getBoundingClientRect().height
+        : undefined,
+    overscan: 4,
+  });
+
   return (
-    <>
-      {items.map((item) => {
-        if (item.type === "message") {
-          return (
-            <MessageItem
-              key={item.id}
-              item={item}
-              actions={actions}
-              sessionId={sessionId}
-              layout={layout}
-              isRunning={isRunning}
-            />
-          );
-        }
-        if (item.type === "ask_user") {
-          return (
-            <AskUserInlineCard
-              key={item.id}
-              request={item.request}
-              status={item.status}
-              onResponse={async (approved, value) => {
-                if (askUserBridge.resolve) {
-                  return await askUserBridge.resolve(item.id, approved, value);
-                }
-                return false;
-              }}
-            />
-          );
-        }
-        return null;
+    <div
+      ref={wrapperRef}
+      style={{
+        height: `${rowVirtualizer.getTotalSize()}px`,
+        width: "100%",
+        position: "relative",
+      }}
+    >
+      {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+        const item = items[virtualItem.index];
+        return (
+          <div
+            key={item.id}
+            data-index={virtualItem.index}
+            ref={rowVirtualizer.measureElement}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              transform: `translateY(${virtualItem.start}px)`,
+              paddingBottom: layout === "default" ? "32px" : "20px",
+            }}
+          >
+            {item.type === "message" ? (
+              <MessageItem
+                item={item}
+                actions={actions}
+                sessionId={sessionId}
+                layout={layout}
+                isRunning={isRunning}
+              />
+            ) : item.type === "ask_user" ? (
+              <AskUserInlineCard
+                request={item.request}
+                status={item.status}
+                onResponse={async (approved, value) => {
+                  if (askUserBridge.resolve) {
+                    return await askUserBridge.resolve(
+                      item.id,
+                      approved,
+                      value,
+                    );
+                  }
+                  return false;
+                }}
+              />
+            ) : item.type === "capability_confirmation" ? (
+              <CapabilityConfirmationCard
+                tool_name={item.tool_name}
+                arguments={item.arguments}
+                prompt={item.prompt}
+                subagent_name={item.subagent_name}
+                status={item.status}
+                onApprove={async (scope) => {
+                  const { eventBus } = await import("@/lib/eventBus");
+                  eventBus.emit("capability:approve", {
+                    sessionId: item.session_id,
+                    toolCallId: item.id,
+                    scope,
+                    patternKey: item.pattern_key,
+                  });
+                  return true;
+                }}
+                onReject={async (feedback) => {
+                  const { eventBus } = await import("@/lib/eventBus");
+                  eventBus.emit("capability:reject", {
+                    sessionId: item.session_id,
+                    toolCallId: item.id,
+                    feedback,
+                  });
+                  return true;
+                }}
+              />
+            ) : null}
+          </div>
+        );
       })}
-    </>
+    </div>
   );
 }
 

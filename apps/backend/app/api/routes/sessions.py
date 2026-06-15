@@ -269,6 +269,7 @@ def _get_hosting_binding_for_session(
     return workspace_id, workspace_root, None
 
 
+from app.api.routes.sessions_approvals import router as sessions_approvals_router
 from app.api.routes.sessions_branches import router as sessions_branches_router
 from app.api.routes.sessions_execution import router as sessions_execution_router
 from app.api.routes.sessions_exports import router as sessions_exports_router
@@ -518,6 +519,11 @@ def _resolve_session_context_tokens(
     if active_count is not None:
         return active_count
 
+    # 优先读取 metadata 顶层保存的精确 context_tokens（与 budget 独立）
+    meta_context = _coerce_positive_int(getattr(metadata_obj, "context_tokens", None))
+    if meta_context is not None:
+        return meta_context
+
     budget = getattr(metadata_obj, "budget", None)
     budget_context = _coerce_positive_int(getattr(budget, "context_tokens", None))
     if budget_context is not None:
@@ -540,6 +546,7 @@ def _resolve_session_context_tokens(
     return estimate_text_tokens(_iter_snapshot_messages(snapshot_path))
 
 
+router.include_router(sessions_approvals_router)
 router.include_router(sessions_branches_router)
 router.include_router(sessions_messages_router)
 router.include_router(sessions_execution_router)

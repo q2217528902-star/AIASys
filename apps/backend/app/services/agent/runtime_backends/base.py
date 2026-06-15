@@ -35,7 +35,11 @@ RuntimeEventKind = Literal[
     "budget_limited",
     "budget_updated",
     "ask_user_request",
+    "capability_confirmation",
+    "compaction",
 ]
+
+RuntimeCompactionPhase = Literal["begin", "done"]
 
 RuntimeContentType = Literal["text", "think"]
 RuntimeLifecycleScope = Literal["host", "subagent"]
@@ -65,6 +69,12 @@ class AgentRuntimeEvent:
     subagent_name: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    context_tokens: int | None = None
+    phase: RuntimeCompactionPhase | None = None
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+    saved_tokens: int | None = None
+    summary_tokens: int | None = None
 
 
 @runtime_checkable
@@ -101,7 +111,8 @@ class RuntimeSessionCreateSpec:
     agent_file: Path
     skills_dir: WorkspacePath | None
     mcp_configs: list | None
-    yolo: bool
+    yolo: bool = False  # 兼容旧标记，等价于 authorization_mode="full_auto"
+    authorization_mode: str = "smart"  # manual | smart | auto | full_auto
     # 子 Agent 继承模型字段
     is_subagent: bool = False
     parent_registry: "ToolRegistry | None" = None

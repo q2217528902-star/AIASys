@@ -122,7 +122,10 @@ function buildSegmentsFromSDKMessage(
   }
 
   if (reasoningContent && !hasStructuredThink) {
-    segments.unshift({
+    // 将 reasoning_content 的 think 段插入到 turn 标记之后，保持 turn 在首位的视觉顺序
+    const turnIndex = segments.findIndex((seg) => seg.type === "turn");
+    const insertIndex = turnIndex >= 0 ? turnIndex + 1 : 0;
+    segments.splice(insertIndex, 0, {
       type: "think",
       content: reasoningContent,
       isComplete: true,
@@ -141,21 +144,6 @@ function buildSegmentsFromSDKMessage(
     }
   }
 
-  // 按类型排序：turn → think → tool_call → tool_output → text → monitor
-  const SEGMENT_ORDER: Record<string, number> = {
-    turn: 0,
-    think: 0,
-    tool_call: 1,
-    tool_output: 2,
-    text: 3,
-    monitor: 4,
-  };
-  segments.sort((a, b) => {
-    const orderA = SEGMENT_ORDER[a.type] ?? 99;
-    const orderB = SEGMENT_ORDER[b.type] ?? 99;
-    return orderA - orderB;
-  });
-
   return segments.length > 0 ? segments : undefined;
 }
 
@@ -172,7 +160,14 @@ function mergeAssistantMessages(messages: HistoryMessage[]): HistoryMessage[] {
 
     if (msg.role === "assistant" && mergedMessages.length > 0) {
       const lastMsg = mergedMessages[mergedMessages.length - 1];
-      if (lastMsg.role === "assistant") {
+      // 只有同 turn 的 assistant 消息才合并，避免破坏 turn 边界
+      // 没有 turn_n 的旧数据无法判断同 turn，保守不合并
+      if (
+        lastMsg.role === "assistant" &&
+        typeof lastMsg.turn_n === "number" &&
+        typeof msg.turn_n === "number" &&
+        lastMsg.turn_n === msg.turn_n
+      ) {
         const lastContent = Array.isArray(lastMsg.content)
           ? lastMsg.content
           : typeof lastMsg.content === "string" && lastMsg.content.trim()
@@ -187,6 +182,18 @@ function mergeAssistantMessages(messages: HistoryMessage[]): HistoryMessage[] {
         lastMsg.content = [...lastContent, ...nextContent];
         if (msg.tool_calls) {
           lastMsg.tool_calls = [...(lastMsg.tool_calls || []), ...msg.tool_calls];
+        }
+        // 合并 reasoning_content，避免思考内容丢失
+        const nextReasoning =
+          typeof msg.reasoning_content === "string" ? msg.reasoning_content.trim() : "";
+        if (nextReasoning) {
+          const existingReasoning =
+            typeof lastMsg.reasoning_content === "string"
+              ? lastMsg.reasoning_content.trim()
+              : "";
+          lastMsg.reasoning_content = existingReasoning
+            ? `${existingReasoning}\n${nextReasoning}`
+            : nextReasoning;
         }
         continue;
       }
@@ -214,7 +221,7 @@ export function restoreChatItemsFromHistory(
   const restoredItems: ChatItem[] = [];
   const mergedMessages = mergeAssistantMessages(messages);
   const toolNameMap = new Map<string, string>();
-  let turnIndex = 0;
+  let legacyTurnIndex = 0;
 
   mergedMessages.forEach((msg, index) => {
     const timeValue = Date.now() + index;
@@ -233,6 +240,22 @@ export function restoreChatItemsFromHistory(
       if (content.trim().startsWith("<system-reminder>")) {
         return;
       }
+
+      // 压缩摘要消息使用特殊 UI 展示，不作为普通用户消息。
+      if (msg.origin === "compaction_summary") {
+        restoredItems.push({
+          type: "message",
+          id: msg.id || `compaction-${sessionId}-${timeValue}-${index}`,
+          sender: "system",
+          role: "system",
+          content: content,
+          segments: [{ type: "compaction_summary", content }],
+          timestamp: new Date(timeValue),
+          isStreaming: false,
+        });
+        return;
+      }
+
       restoredItems.push({
         type: "message",
         id: msg.id || `msg-${sessionId}-${timeValue}-${index}`,
@@ -248,20 +271,32 @@ export function restoreChatItemsFromHistory(
 
     if (msg.role === "assistant") {
       const hasContent = _hasSubstantiveContent(msg);
+      // 优先使用后端返回的 turn_n，无则退化为旧的自增逻辑（兼容旧会话）
+      let turnN: number | undefined;
       if (hasContent) {
-        turnIndex++;
+        if (typeof msg.turn_n === "number") {
+          turnN = msg.turn_n;
+        } else {
+          legacyTurnIndex++;
+          turnN = legacyTurnIndex;
+        }
       }
-      const segments = buildSegmentsFromSDKMessage(msg, hasContent ? turnIndex : undefined);
+      const segments = buildSegmentsFromSDKMessage(msg, turnN);
       const lastItem = restoredItems[restoredItems.length - 1];
 
       if (lastItem && lastItem.type === "message" && lastItem.sender === "ai") {
         const existingSegments = lastItem.segments || [];
         const allSegments = [...existingSegments, ...(segments || [])];
-        lastItem.segments = allSegments;
-        lastItem.content = allSegments
-          .filter((segment) => segment.type === "text" || segment.type === "think")
-          .map((segment) => segment.content)
-          .join("");
+        // 不可变更新：替换数组中的对象而非直接修改
+        const lastIdx = restoredItems.length - 1;
+        restoredItems[lastIdx] = {
+          ...lastItem,
+          segments: allSegments,
+          content: allSegments
+            .filter((segment) => segment.type === "text" || segment.type === "think")
+            .map((segment) => segment.content)
+            .join(""),
+        };
         return;
       }
 
@@ -287,7 +322,7 @@ export function restoreChatItemsFromHistory(
       return;
     }
 
-    const content = typeof msg.content === "string" ? msg.content : "";
+    const content = getHistoryTextContent(msg.content);
     const lastItem = restoredItems[restoredItems.length - 1];
     const toolName = toolNameMap.get(msg.tool_call_id || "") || "unknown";
 
@@ -298,7 +333,12 @@ export function restoreChatItemsFromHistory(
         toolCallId: msg.tool_call_id,
         toolName,
       };
-      lastItem.segments = [...(lastItem.segments || []), toolOutputSeg];
+      // 不可变更新：替换数组中的对象而非直接修改
+      const lastIdx = restoredItems.length - 1;
+      restoredItems[lastIdx] = {
+        ...lastItem,
+        segments: [...(lastItem.segments || []), toolOutputSeg],
+      };
       return;
     }
 

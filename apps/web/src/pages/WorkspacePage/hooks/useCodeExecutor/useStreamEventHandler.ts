@@ -34,6 +34,16 @@ interface UseStreamEventHandlerProps {
   onAskUserRequest?: (request: AskUserRequest, sessionId: string) => void;
   /** 当收到 Sub Agent 事件时调用（用于刷新执行树） */
   onSubAgentEvent?: (event: unknown) => void;
+  /** 当收到上下文压缩事件时调用 */
+  onCompactionEvent?: (payload: {
+    phase: "begin" | "done";
+    tokens_before?: number;
+    tokens_after?: number;
+    saved_tokens?: number;
+    summary_tokens?: number;
+  }) => void;
+  /** 当收到 token_usage 事件时调用（用于刷新右栏上下文占用） */
+  onTokenUsageShouldRefresh?: () => void;
 }
 
 export function useStreamEventHandler({
@@ -43,12 +53,18 @@ export function useStreamEventHandler({
   isSessionRunning,
   onAskUserRequest,
   onSubAgentEvent,
+  onCompactionEvent,
+  onTokenUsageShouldRefresh,
 }: UseStreamEventHandlerProps) {
   // 用 ref 持有频繁变化的外部回调，避免 handleStreamEvent 每帧重建
   const onAskUserRequestRef = useRef(onAskUserRequest);
   onAskUserRequestRef.current = onAskUserRequest;
   const onSubAgentEventRef = useRef(onSubAgentEvent);
   onSubAgentEventRef.current = onSubAgentEvent;
+  const onCompactionEventRef = useRef(onCompactionEvent);
+  onCompactionEventRef.current = onCompactionEvent;
+  const onTokenUsageShouldRefreshRef = useRef(onTokenUsageShouldRefresh);
+  onTokenUsageShouldRefreshRef.current = onTokenUsageShouldRefresh;
   const isSessionRunningRef = useRef(isSessionRunning);
   isSessionRunningRef.current = isSessionRunning;
 
@@ -499,10 +515,57 @@ export function useStreamEventHandler({
       syncSegmentsToUI(sessionId);
     }
 
+    // Type: Token Usage — 后端已返回最终精确 token 数，立即刷新右栏上下文占用
+    if (eventType === "token_usage") {
+      onTokenUsageShouldRefreshRef.current?.();
+    }
+
+    // Type: Compaction
+    if (eventType === "compaction") {
+      const payload = event as {
+        phase: "begin" | "done";
+        tokens_before?: number;
+        tokens_after?: number;
+        saved_tokens?: number;
+        summary_tokens?: number;
+      };
+      onCompactionEventRef.current?.(payload);
+    }
+
     // Type: Ask User Request
     if (eventType === "ask_user_request" && "request" in event) {
       console.log("[useStreamEventHandler] ask_user_request received, calling onAskUserRequest:", event.request);
       onAskUserRequestRef.current?.(event.request, sessionId);
+    }
+
+    // Type: Capability Confirmation (运行时审批)
+    if (
+      (eventType === "capability_confirmation" || eventType === "subagent_capability_confirmation")
+      && "tool_call_id" in event
+    ) {
+      const isSubagent = eventType === "subagent_capability_confirmation";
+      updateChatItems(sessionId, (prev: ChatItem[]) => {
+        // 避免重复添加同 tool_call_id
+        if (prev.some((item) => item.type === "capability_confirmation" && item.id === event.tool_call_id)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            type: "capability_confirmation" as const,
+            id: event.tool_call_id,
+            tool_name: event.tool_name || "未知工具",
+            arguments: (event.arguments || {}) as Record<string, unknown>,
+            prompt: event.content || `是否允许执行工具 ${event.tool_name || ""}？`,
+            session_id: sessionId,
+            status: "pending",
+            subagent_name: isSubagent ? (event as any).subagent_name : undefined,
+            agent_id: isSubagent ? (event as any).agent_id : undefined,
+            pattern_key: (event as any).pattern_key,
+            timestamp: new Date(),
+          },
+        ];
+      });
     }
 
     // Type: Budget Limited

@@ -16,6 +16,7 @@ import {
   Bot,
   Terminal,
   Eye,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PreviewFile, PreviewFileType } from "@/components/layout/WorkspaceSidebar/preview";
@@ -28,6 +29,8 @@ export interface WorkspaceTab {
   terminalId?: string;
   databaseHandle?: string;
   capabilityDetail?: { workspaceId: string; capabilityId: string; displayName: string };
+  url?: string;
+  runtime?: boolean;
 }
 
 interface WorkspaceTabBarProps {
@@ -44,11 +47,24 @@ interface WorkspaceTabBarProps {
   onTabReorder?: (fromIndex: number, toIndex: number) => void;
   onTabDirtyCheck?: (tabId: string) => boolean;
   onNewTerminalTab?: () => void;
+  onOpenRuntimeTab?: () => void;
   onNewTab?: () => void;
+  onNewBrowserTab?: (url: string) => void;
 }
 
 function getFileBaseName(path: string): string {
   return path.split("/").filter(Boolean).pop() || path;
+}
+
+function getBrowserTabTitle(url: string): string {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return url;
+    }
+  }
+  return getFileBaseName(url);
 }
 
 function getTabIcon(type: PreviewFileType) {
@@ -137,7 +153,9 @@ export function WorkspaceTabBar({
   onTabReorder,
   onTabDirtyCheck,
   onNewTerminalTab,
+  onOpenRuntimeTab,
   onNewTab,
+  onNewBrowserTab,
 }: WorkspaceTabBarProps) {
   const showActionButtons = activeTabId !== null;
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
@@ -152,6 +170,10 @@ export function WorkspaceTabBar({
     tabId: "",
   });
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const [showNewTabDropdown, setShowNewTabDropdown] = useState(false);
+  const [showUrlDialog, setShowUrlDialog] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, tabId: string) => {
@@ -183,6 +205,17 @@ export function WorkspaceTabBar({
     };
   }, [contextMenu.visible, hideContextMenu]);
 
+  // 点击外部关闭下拉菜单
+  useEffect(() => {
+    if (!showNewTabDropdown) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (dropdownRef.current?.contains(event.target as Node)) return;
+      setShowNewTabDropdown(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [showNewTabDropdown]);
+
   const contextMenuTabIndex = tabs.findIndex((t) => t.id === contextMenu.tabId);
   const hasRightTabs = contextMenuTabIndex >= 0 && contextMenuTabIndex < tabs.length - 1;
   const hasOtherTabs = tabs.length > 1;
@@ -204,7 +237,11 @@ export function WorkspaceTabBar({
           ? `查询 ${tab.databaseHandle}`
           : tab.capabilityDetail
             ? tab.capabilityDetail.displayName
-            : getFileBaseName(tab.file?.name ?? tab.subagentId?.slice(0, 8) ?? "标签"),
+            : tab.url
+              ? tab.url
+              : tab.runtime
+                ? "执行环境"
+                : getFileBaseName(tab.file?.name ?? tab.subagentId?.slice(0, 8) ?? "标签"),
     );
     e.dataTransfer.setDragImage(ghost, 10, 10);
     requestAnimationFrame(() => {
@@ -327,6 +364,8 @@ export function WorkspaceTabBar({
           const isTerminal = !!tab.terminalId;
           const isDatabase = !!tab.databaseHandle;
           const isCapabilityDetail = !!tab.capabilityDetail;
+          const isBrowser = !!tab.url;
+          const isRuntime = !!tab.runtime;
           const TabIcon = isSubagent
             ? Bot
             : isTerminal
@@ -335,7 +374,11 @@ export function WorkspaceTabBar({
                 ? Database
                 : isCapabilityDetail
                   ? Eye
-                  : getTabIcon(tab.file?.type ?? "unknown");
+                  : isBrowser
+                    ? Globe
+                    : isRuntime
+                      ? FlaskConical
+                      : getTabIcon(tab.file?.type ?? "unknown");
           const tabTitle = isSubagent
             ? tab.subagentId!.slice(0, 8) + "..."
             : isTerminal
@@ -344,7 +387,11 @@ export function WorkspaceTabBar({
                 ? `查询 ${tab.databaseHandle}`
                 : isCapabilityDetail
                   ? tab.capabilityDetail!.displayName
-                  : (tab.file?.name ?? "");
+                  : isBrowser
+                    ? getBrowserTabTitle(tab.url!)
+                    : isRuntime
+                      ? "执行环境"
+                      : (tab.file?.name ?? "");
           return (
             <div key={tab.id} className="flex items-center">
               {showInsertBefore ? (
@@ -370,8 +417,8 @@ export function WorkspaceTabBar({
                   onClick={() => onTabClick(tab.id)}
                 >
                   <TabIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate font-mono">
-                  {isSubagent || isTerminal || isDatabase || isCapabilityDetail
+                  <span className={cn("truncate", !isBrowser && "font-mono")}>
+                  {isSubagent || isTerminal || isDatabase || isCapabilityDetail || isBrowser || isRuntime
                     ? tabTitle
                     : getFileBaseName(tab.file!.name)}
                   </span>
@@ -401,15 +448,64 @@ export function WorkspaceTabBar({
 
       {/* 右侧操作区 */}
       <div className="flex shrink-0 items-center gap-0.5 border-l border-border pl-1.5">
-        {onNewTab ? (
-          <button
-            type="button"
-            className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="新建"
-            onClick={onNewTab}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
+        {onNewTab || onNewBrowserTab || onNewTerminalTab ? (
+          <div className="relative">
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title="新建"
+              onClick={() => setShowNewTabDropdown((v) => !v)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+            {showNewTabDropdown ? (
+              <div
+                ref={dropdownRef}
+                className="absolute right-0 top-full z-50 mt-1 w-40 overflow-hidden rounded-md border border-border bg-background p-1 text-xs text-foreground shadow-lg"
+              >
+                {onNewBrowserTab ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setShowNewTabDropdown(false);
+                      setShowUrlDialog(true);
+                      setUrlInput("");
+                    }}
+                  >
+                    <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                    浏览器视图
+                  </button>
+                ) : null}
+                {onOpenRuntimeTab ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setShowNewTabDropdown(false);
+                      onOpenRuntimeTab();
+                    }}
+                  >
+                    <FlaskConical className="h-3.5 w-3.5 text-muted-foreground" />
+                    执行环境
+                  </button>
+                ) : null}
+                {onNewTerminalTab ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={() => {
+                      setShowNewTabDropdown(false);
+                      onNewTerminalTab();
+                    }}
+                  >
+                    <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
+                    终端
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
         {showActionButtons && onTabSplitRight ? (
           <button
@@ -490,6 +586,63 @@ export function WorkspaceTabBar({
           ) : null}
         </div>
       )}
+
+      {/* URL 输入对话框 */}
+      {showUrlDialog ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50">
+          <div className="w-[420px] rounded-xl border border-border bg-background p-5 shadow-xl">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+              <Globe className="h-4 w-4 text-accent" />
+              新建浏览器视图
+            </h3>
+            <input
+              type="text"
+              className="mb-4 w-full rounded-md border border-border bg-muted/50 px-3 py-2 text-xs font-mono text-foreground outline-none transition-colors focus:border-accent"
+              placeholder="https://example.com 或 reports/dashboard.html"
+              value={urlInput}
+              onChange={(e) => setUrlInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && urlInput.trim()) {
+                  onNewBrowserTab?.(urlInput.trim());
+                  setShowUrlDialog(false);
+                  setUrlInput("");
+                }
+                if (e.key === "Escape") {
+                  setShowUrlDialog(false);
+                  setUrlInput("");
+                }
+              }}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md px-3 py-1.5 text-xs transition-colors hover:bg-muted"
+                onClick={() => {
+                  setShowUrlDialog(false);
+                  setUrlInput("");
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+                disabled={!urlInput.trim()}
+                onClick={() => {
+                  if (urlInput.trim()) {
+                    onNewBrowserTab?.(urlInput.trim());
+                    setShowUrlDialog(false);
+                    setUrlInput("");
+                  }
+                }}
+              >
+                打开
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

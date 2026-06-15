@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..", "..");
@@ -187,7 +188,197 @@ function fixVenvPythonSymlink(venvRoot, embedPythonRoot) {
   }
 }
 
+/**
+ * 在嵌入的 Python 目录中查找 framework 路径对应的本地文件。
+ */
+function resolveEmbedDylibPath(frameworkPath, embedPythonRoot) {
+  // 匹配 /Library/Frameworks/Python.framework/Versions/3.12/...
+  const match = frameworkPath.match(
+    /^\/Library\/Frameworks\/Python\.framework\/Versions\/\d+\/(.+)$/
+  );
+  if (match) {
+    const candidate = path.join(embedPythonRoot, match[1]);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  // fallback: 如果只依赖根目录的 Python dylib
+  if (frameworkPath.endsWith("/Python")) {
+    const candidate = path.join(embedPythonRoot, "Python");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * 检查文件是否是 Mach-O 格式（可执行文件、.dylib、.so）。
+ */
+function isMachOFile(filePath) {
+  try {
+    const fd = fs.openSync(filePath, "r");
+    const magic = Buffer.alloc(4);
+    fs.readSync(fd, magic, 0, 4, 0);
+    fs.closeSync(fd);
+    // Mach-O 64-bit: 0xfeedfacf (小端: cf fa ed fe)
+    // Mach-O 32-bit: 0xfeedface (小端: ce fa ed fe)
+    // Universal:      0xcafebabe (大端: ca fe ba be)
+    return (
+      (magic[0] === 0xcf && magic[1] === 0xfa && magic[2] === 0xed && magic[3] === 0xfe) ||
+      (magic[0] === 0xce && magic[1] === 0xfa && magic[2] === 0xed && magic[3] === 0xfe) ||
+      (magic[0] === 0xca && magic[1] === 0xfe && magic[2] === 0xba && magic[3] === 0xbe)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 修复单个 Mach-O 文件中硬编码的 Python.framework dylib 绝对路径。
+ */
+function fixSingleDylibPath(filePath, embedPythonRoot) {
+  if (!isMachOFile(filePath)) return false;
+
+  const otoolResult = spawnSync("otool", ["-L", filePath], { encoding: "utf-8" });
+  if (otoolResult.status !== 0) return false;
+
+  const frameworkPrefix = "/Library/Frameworks/Python.framework/";
+  const lines = otoolResult.stdout.split("\n");
+  let fixed = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(frameworkPrefix)) continue;
+
+    const oldPath = trimmed.split(" ")[0];
+    const embedTarget = resolveEmbedDylibPath(oldPath, embedPythonRoot);
+    if (!embedTarget) continue;
+
+    const relativePath = path.relative(path.dirname(filePath), embedTarget);
+    const newPath = "@loader_path/" + relativePath;
+
+    const installResult = spawnSync("install_name_tool", [
+      "-change", oldPath, newPath, filePath,
+    ]);
+
+    if (installResult.status === 0) {
+      console.log(
+        `[aiasys-desktop] 修复 dylib: ${path.relative(embedPythonRoot, filePath)} ` +
+          `${oldPath} -> ${newPath}`
+      );
+      fixed = true;
+    } else {
+      console.warn(
+        `[aiasys-desktop] 修复 dylib 失败: ${path.relative(embedPythonRoot, filePath)}`,
+        installResult.stderr || ""
+      );
+    }
+  }
+
+  return fixed;
+}
+
+/**
+ * 递归修复目录下所有 .so/.dylib 文件的 dylib 路径。
+ */
+function fixDylibPathsInDir(dir, embedPythonRoot, fixedFiles) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const filePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      fixDylibPathsInDir(filePath, embedPythonRoot, fixedFiles);
+    } else if (entry.name.endsWith(".so") || entry.name.endsWith(".dylib")) {
+      if (fixSingleDylibPath(filePath, embedPythonRoot)) {
+        fixedFiles.push(path.relative(embedPythonRoot, filePath));
+      }
+    }
+  }
+}
+
+/**
+ * 检测嵌入的 Python 是否是官方 Python（依赖 /Library/Frameworks/ 系统框架）。
+ * python-build-standalone 使用 @rpath 相对路径，不会匹配此模式。
+ */
+function isOfficialMacOSPython(embedPythonRoot) {
+  if (process.platform !== "darwin") return false;
+  const pythonExe = path.join(embedPythonRoot, "bin", "python3");
+  if (!fs.existsSync(pythonExe)) {
+    // fallback 检查 python（不带版本号）
+    const pythonExe2 = path.join(embedPythonRoot, "bin", "python");
+    if (!fs.existsSync(pythonExe2)) return false;
+  }
+  const target = fs.existsSync(pythonExe) ? pythonExe : path.join(embedPythonRoot, "bin", "python");
+  const otoolResult = spawnSync("otool", ["-L", target], { encoding: "utf-8" });
+  if (otoolResult.status !== 0) return false;
+  return otoolResult.stdout.includes("/Library/Frameworks/Python.framework/");
+}
+
+/**
+ * macOS 上修复嵌入 Python 中所有 Mach-O 文件的 dylib 加载路径。
+ * 官方 Python 的可执行文件硬编码了 /Library/Frameworks/Python.framework/... 的绝对路径，
+ * 需要替换为 @loader_path/... 相对路径，使应用能在没有系统框架的目标机器上运行。
+ */
+function fixMacOSDylibPaths(embedPythonRoot) {
+  const hasOtool = spawnSync("which", ["otool"]).status === 0;
+  const hasInstallNameTool = spawnSync("which", ["install_name_tool"]).status === 0;
+  if (!hasOtool || !hasInstallNameTool) {
+    console.warn(
+      "[aiasys-desktop] 未找到 otool/install_name_tool，跳过 dylib 路径修复。" +
+        "建议安装 Xcode Command Line Tools。"
+    );
+    return;
+  }
+
+  // 检测是否是官方 Python，给出明确警告
+  if (isOfficialMacOSPython(embedPythonRoot)) {
+    console.warn(
+      "[aiasys-desktop] 警告：检测到官方 Python（依赖 /Library/Frameworks/ 系统框架）。" +
+        "正在尝试用 install_name_tool 修复 dylib 路径，但最佳方案是使用 " +
+        "'uv python install 3.12' 安装 python-build-standalone。"
+    );
+  }
+
+  const fixedFiles = [];
+
+  // 修复 bin/ 目录中的可执行文件
+  const binDir = path.join(embedPythonRoot, "bin");
+  if (fs.existsSync(binDir)) {
+    for (const entry of fs.readdirSync(binDir)) {
+      const filePath = path.join(binDir, entry);
+      if (fixSingleDylibPath(filePath, embedPythonRoot)) {
+        fixedFiles.push(path.relative(embedPythonRoot, filePath));
+      }
+    }
+  }
+
+  // 递归修复 lib/ 目录中的 .so/.dylib
+  const libDir = path.join(embedPythonRoot, "lib");
+  if (fs.existsSync(libDir)) {
+    fixDylibPathsInDir(libDir, embedPythonRoot, fixedFiles);
+  }
+
+  if (fixedFiles.length > 0) {
+    console.log(`[aiasys-desktop] 已修复 ${fixedFiles.length} 个文件的 dylib 路径`);
+  }
+}
+
 function prepareBackendRuntime() {
+  // 确保当前平台的 fnm 二进制已下载到 vendor/node/<slug>/
+  {
+    const downloadScript = path.join(__dirname, "download-fnm-binary.cjs");
+    const result = spawnSync("node", [downloadScript], {
+      encoding: "utf-8",
+      stdio: "pipe",
+    });
+    if (result.status !== 0) {
+      const detail = result.stderr || result.error || `exit ${result.status}`;
+      console.error("[aiasys-desktop] 下载 fnm 二进制失败:", detail);
+      throw new Error(`下载 fnm 二进制失败: ${detail}`);
+    }
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+  }
   const requiredEntries = [
     ".venv",
     "app",
@@ -201,27 +392,33 @@ function prepareBackendRuntime() {
   ];
 
   const optionalEntries = [
-    "config.json",
-    "config.example.json",
+    "config.toml",
+    "config.example.toml",
     "scripts",
     "fonts",
     "docs",
   ];
 
   for (const entry of requiredEntries) {
-    copyPath(path.join(backendRoot, entry), path.join(backendStageRoot, entry));
+    // macOS/Linux 上 .venv 包含大量指向系统 Python 的符号链接，
+    // 不解引用会导致目标机器上链接失效。Windows 无需此处理。
+    const options =
+      entry === ".venv" && process.platform !== "win32"
+        ? { dereference: true }
+        : {};
+    copyPath(path.join(backendRoot, entry), path.join(backendStageRoot, entry), options);
   }
 
   for (const entry of optionalEntries) {
     copyPathIfExists(path.join(backendRoot, entry), path.join(backendStageRoot, entry));
   }
 
-  // config.json 不在仓库中时，用 config.example.json 兜底
-  const stagedConfigPath = path.join(backendStageRoot, "config.json");
-  const stagedExamplePath = path.join(backendStageRoot, "config.example.json");
+  // config.toml 不在仓库中时，用 config.example.toml 兜底
+  const stagedConfigPath = path.join(backendStageRoot, "config.toml");
+  const stagedExamplePath = path.join(backendStageRoot, "config.example.toml");
   if (!fs.existsSync(stagedConfigPath) && fs.existsSync(stagedExamplePath)) {
     fs.copyFileSync(stagedExamplePath, stagedConfigPath);
-    console.warn("[aiasys-desktop] config.json 不存在，已从 config.example.json 复制");
+    console.warn("[aiasys-desktop] config.toml 不存在，已从 config.example.toml 复制");
   }
 
   fs.mkdirSync(path.join(backendStageRoot, "data", "workspaces"), { recursive: true });
@@ -237,7 +434,11 @@ function prepareBackendRuntime() {
     const embedPythonRoot = path.join(backendStageRoot, ".venv", "python");
     if (!fs.existsSync(embedPythonRoot)) {
       console.log(`[aiasys-desktop] 嵌入完整 Python 运行时: ${pythonRoot} -> ${embedPythonRoot}`);
-      fs.cpSync(pythonRoot, embedPythonRoot, { recursive: true, preserveTimestamps: true });
+      fs.cpSync(pythonRoot, embedPythonRoot, {
+        recursive: true,
+        preserveTimestamps: true,
+        dereference: true,
+      });
 
       // 实体化指向外部路径的符号链接，避免在目标机器上失效
       materializeBinSymlinks(embedPythonRoot);
@@ -254,7 +455,7 @@ function prepareBackendRuntime() {
         }
       }
 
-      // Linux/macOS: 确保 bin 目录下的可执行文件有正确权限
+          // Linux/macOS: 确保 bin 目录下的可执行文件有正确权限
       if (process.platform !== "win32") {
         const binDir = path.join(embedPythonRoot, "bin");
         if (fs.existsSync(binDir)) {
@@ -273,10 +474,155 @@ function prepareBackendRuntime() {
           }
         }
       }
+
+      // macOS: 修复硬编码的 Python.framework dylib 绝对路径
+      if (process.platform === "darwin") {
+        fixMacOSDylibPaths(embedPythonRoot);
+
+        // 同时修复 .venv/bin/ 中的可执行文件
+        // venv 入口点（.venv/bin/python3）在 dereference: true 复制后可能是系统 Python 副本，
+        // dylib 路径未修复。需要确保它能正常启动并找到 pyvenv.cfg。
+        const venvBinDir = path.join(backendStageRoot, ".venv", "bin");
+        if (fs.existsSync(venvBinDir)) {
+          const venvBinFixedFiles = [];
+          for (const entry of fs.readdirSync(venvBinDir)) {
+            const filePath = path.join(venvBinDir, entry);
+            if (fixSingleDylibPath(filePath, embedPythonRoot)) {
+              venvBinFixedFiles.push(entry);
+            }
+          }
+          if (venvBinFixedFiles.length > 0) {
+            console.log(
+              `[aiasys-desktop] 已修复 .venv/bin 中 ${venvBinFixedFiles.length} 个文件的 dylib 路径`
+            );
+          }
+        }
+
+        // 同时修复 .venv/lib 中的原生扩展（如 lib-dynload 中的 .so）
+        // 这些文件在 import 时加载，也可能硬编码了 framework 路径
+        const venvLibDir = path.join(backendStageRoot, ".venv", "lib");
+        if (fs.existsSync(venvLibDir)) {
+          const venvFixedFiles = [];
+          fixDylibPathsInDir(venvLibDir, embedPythonRoot, venvFixedFiles);
+          if (venvFixedFiles.length > 0) {
+            console.log(
+              `[aiasys-desktop] 已修复 .venv/lib 中 ${venvFixedFiles.length} 个文件的 dylib 路径`
+            );
+          }
+        }
+      }
     }
   } else {
     console.warn("[aiasys-desktop] 未找到 pyvenv.cfg home 路径，嵌入 Python 可能不完整");
   }
+
+  // 修复 .venv/bin/ 脚本 shebang 中的构建机绝对路径
+  fixVenvBinShebangs(backendStageRoot);
+
+  // 修复 pyvenv.cfg 的 home 路径为嵌入目录
+  // AppImage squashfs 只读，运行时无法原地修改，必须在构建时修正
+  fixPyvenvCfgHome(backendStageRoot);
+}
+
+/**
+ * 修复 .venv/bin/ 脚本 shebang 中的构建机绝对路径。
+ * dereference: true 复制后，脚本的 shebang 仍指向构建机路径，
+ * 在目标机器上会报 "bad interpreter"。替换为 /usr/bin/env python3。
+ */
+function fixVenvBinShebangs(backendStageRoot) {
+  const venvBinDir = path.join(backendStageRoot, ".venv", "bin");
+  if (!fs.existsSync(venvBinDir)) {
+    return;
+  }
+
+  const embedPythonBinDir = path.join(backendStageRoot, ".venv", "python", "bin");
+  const embedPython = path.join(embedPythonBinDir, "python3");
+  const fallbackShebang = "#!/usr/bin/env python3";
+
+  let fixed = 0;
+  for (const entry of fs.readdirSync(venvBinDir)) {
+    const filePath = path.join(venvBinDir, entry);
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) {
+      continue;
+    }
+
+    let content;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const lines = content.split(/\r?\n/);
+    const shebang = lines[0];
+    if (!shebang || !shebang.startsWith("#!")) {
+      continue;
+    }
+
+    // 如果 shebang 包含绝对路径（以 / 开头且包含构建机路径特征），修复它
+    const needsFix =
+      shebang.startsWith("#!/") &&
+      (
+        // 指向仓库内的 .venv
+        shebang.includes("/.venv/") ||
+        // 指向系统 Python 路径（如 /Users/xxx/.local/share/uv/python/）
+        shebang.includes("/python") ||
+        // 指向通用 Python 安装路径
+        shebang.includes("/bin/python")
+      );
+
+    if (!needsFix) {
+      continue;
+    }
+
+    // 优先使用嵌入 Python 的绝对路径（如果存在）
+    // 否则回退到 /usr/bin/env python3
+    const newShebang = fs.existsSync(embedPython) ? `#!${embedPython}` : fallbackShebang;
+    lines[0] = newShebang;
+
+    try {
+      fs.writeFileSync(filePath, lines.join("\n"), "utf-8");
+      fixed++;
+    } catch (error) {
+      console.warn(`[aiasys-desktop] 修复 shebang 失败 ${entry}: ${error.message}`);
+    }
+  }
+
+  if (fixed > 0) {
+    console.log(`[aiasys-desktop] 已修复 ${fixed} 个 .venv/bin 脚本的 shebang`);
+  }
+}
+
+/**
+ * 修复 pyvenv.cfg 的 home 路径，指向嵌入的 Python 目录。
+ * AppImage squashfs 只读，运行时无法原地修改，必须在构建时修正。
+ */
+function fixPyvenvCfgHome(backendStageRoot) {
+  const pyvenvPath = path.join(backendStageRoot, ".venv", "pyvenv.cfg");
+  if (!fs.existsSync(pyvenvPath)) {
+    return;
+  }
+
+  const embedPythonDir = path.join(backendStageRoot, ".venv", "python");
+  if (!fs.existsSync(embedPythonDir)) {
+    return;
+  }
+
+  const content = fs.readFileSync(pyvenvPath, "utf-8");
+  const homeMatch = content.match(/^home\s*=\s*(.+)$/m);
+  if (!homeMatch) {
+    return;
+  }
+
+  const currentHome = homeMatch[1].trim();
+  if (path.resolve(currentHome) === path.resolve(embedPythonDir)) {
+    return; // 已经正确，无需修改
+  }
+
+  const newContent = content.replace(/^home\s*=\s*.+$/m, `home = ${embedPythonDir}`);
+  fs.writeFileSync(pyvenvPath, newContent, "utf-8");
+  console.log(`[aiasys-desktop] 已修正 pyvenv.cfg home 路径: ${embedPythonDir}`);
 }
 
 function pruneDevDependencies(backendStageRoot) {

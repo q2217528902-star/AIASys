@@ -70,6 +70,7 @@ export function useCodeExecutor({
     removeSession: removeChatSession,
     setActiveSessionId: setChatActiveSessionId,
     getSessionChatItems,
+    activeSessionIdRef: chatActiveSessionIdRef,
   } = useChatState();
   const {
     state: agentState,
@@ -193,6 +194,7 @@ export function useCodeExecutor({
     updateSessionChatItems,
     addStreamEventsDirect,
     addStreamEventsForSession,
+    chatActiveSessionIdRef,
   });
 
   const isCurrentSessionRunning = sessionOrchestrator.sessionId
@@ -202,6 +204,44 @@ export function useCodeExecutor({
   const refreshTokenUsage = useCallback(() => {
     setTokenUsageRevision((value) => value + 1);
   }, []);
+
+  const [compactionState, setCompactionState] = useState<{
+    phase: "begin" | "done";
+    tokens_before?: number;
+    tokens_after?: number;
+    saved_tokens?: number;
+    summary_tokens?: number;
+    clearTimer?: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const handleCompactionEvent = useCallback(
+    (payload: {
+      phase: "begin" | "done";
+      tokens_before?: number;
+      tokens_after?: number;
+      saved_tokens?: number;
+      summary_tokens?: number;
+    }) => {
+      if (payload.phase === "begin") {
+        setCompactionState((prev) => {
+          if (prev?.clearTimer) clearTimeout(prev.clearTimer);
+          return { ...payload, phase: "begin" };
+        });
+        return;
+      }
+      // done: 刷新 token 占用数据，并短暂展示结果
+      refreshTokenUsage();
+      setCompactionState((prev) => {
+        if (prev?.clearTimer) clearTimeout(prev.clearTimer);
+        const clearTimer = setTimeout(() => {
+          setCompactionState(null);
+        }, 3000);
+        return { ...payload, phase: "done", clearTimer };
+      });
+    },
+    [refreshTokenUsage],
+  );
+
   const shouldAutoSyncVisibleSessionArtifacts = Boolean(
     initialSessionId ||
       chatItems.length > 0 ||
@@ -243,6 +283,7 @@ export function useCodeExecutor({
     showSuccess,
     clearFiles,
     onAskUserRequest: handleAskUserRequest,
+    onCompactionEvent: handleCompactionEvent,
     apiBaseUrl,
     activeSessionIdRef,
     onTokenUsageShouldRefresh: refreshTokenUsage,
@@ -364,28 +405,6 @@ export function useCodeExecutor({
   const handleAddFileClick = useCallback(() => {
     uiState.fileInputRef.current?.click();
   }, [uiState.fileInputRef]);
-
-  const handleImportSuccess = useCallback(async () => {
-    showSuccess("文件已成功导入当前会话");
-    const currentWorkspaceId = getCurrentWorkspaceId();
-    if (sessionOrchestrator.sessionId && currentWorkspaceId) {
-      const files = await reloadWorkspaceFiles(currentWorkspaceId, {
-        force: true,
-      });
-      updateWorkspaceFilesForSession(
-        sessionOrchestrator.sessionId,
-        mapToWorkspaceFiles(files),
-      );
-    }
-    uiState.setShowImportModal(false);
-  }, [
-    showSuccess,
-    reloadWorkspaceFiles,
-    sessionOrchestrator.sessionId,
-    getCurrentWorkspaceId,
-    uiState,
-    updateWorkspaceFilesForSession,
-  ]);
 
   // 只轮询活跃 session
   useWorkspacePolling({
@@ -628,6 +647,16 @@ export function useCodeExecutor({
     shouldAutoSyncVisibleSessionArtifacts,
   ]);
 
+  const handleRemoveFile = useCallback(
+    async (filePath?: string) => {
+      if (!filePath) return;
+      const currentSessionId = sessionOrchestrator.sessionId;
+      const currentWorkspaceId = workspaceId ?? workspaceIdRef?.current;
+      await removeFile(filePath, currentSessionId, currentWorkspaceId);
+    },
+    [removeFile, sessionOrchestrator.sessionId, workspaceId, workspaceIdRef],
+  );
+
   return {
     ...uiState,
     toasts,
@@ -664,19 +693,20 @@ export function useCodeExecutor({
       unregisterHiddenSession(id);
     },
     uploadedFiles,
-    removeFile,
+    removeFile: handleRemoveFile,
     handleUploadFiles,
     handleFileChange,
     handleAddFileClick,
     conversations: sessionOrchestrator.conversations,
     updateSessionTitle: sessionOrchestrator.updateSessionTitle,
-    handleImportSuccess,
     handleViewExecutionSpace,
     ...executionSubmit,
     handleWorkerClick,
     // handleSubAgentClick,
     isRunning: isCurrentSessionRunning,
     tokenUsageRevision,
+    compactionState,
+    handleCompactionEvent,
     rewriteUserMessage,
     hasChatContent: chatItems.length > 0 || isCurrentSessionRunning,
     currentHasAnyRunning:

@@ -509,8 +509,13 @@ class MockLoopControl:
     compaction_trigger_ratio = 0.01  # 极低阈值确保触发
     reserved_context_size = 0
     max_preserved_messages = 1
+    max_preserved_tokens = 20000
     max_summary_tokens = 500
     tool_snip_max_chars = 2000
+    keep_tool_context_turns = 2
+    enable_pre_turn_clearing = True
+    enable_compaction_verification = False
+    effective_context_window_percent = 95.0
 
 
 class MockConfig:
@@ -534,10 +539,62 @@ class _TestSession(SessionCompactionMixin):
         self._estimated_token_count = estimated
         self._client = FakeLlmClient(response_text="Summary.")
         self._model_config = {"max_context_size": 10000}
+        self._context_messages: list[dict[str, Any]] = []
         self.session_id = "test-session"
+        self._history_snapshot: list[dict[str, Any]] | None = None
+        self._compaction_records: list[dict[str, Any]] = []
 
     def _invalidate_system_prompt_snapshot(self) -> None:
         pass
+
+    def _write_history_snapshot(self, messages: list[dict[str, Any]]) -> None:
+        self._history_snapshot = [
+            msg for msg in messages if msg.get("role") in {"user", "assistant", "tool"}
+        ]
+
+    def _append_compaction_record(
+        self,
+        *,
+        summary_path: str,
+        compacted_count: int,
+        preserved_count: int,
+        summary_turn_n: int | None,
+        compacted_turn_range: tuple[int, int] | None,
+    ) -> None:
+        self._compaction_records.append(
+            {
+                "summary_path": summary_path,
+                "compacted_count": compacted_count,
+                "preserved_count": preserved_count,
+                "summary_turn_n": summary_turn_n,
+                "compacted_turn_range": compacted_turn_range,
+            }
+        )
+
+
+class TestCompactOriginAndMetadata:
+    @pytest.mark.asyncio
+    async def test_compact_summary_has_origin_and_turn_n(self):
+        """压缩后的摘要消息必须带 origin=compaction_summary 和合理的 turn_n。"""
+        messages = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1", "turn_n": 1},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2", "turn_n": 2},
+            {"role": "user", "content": "u3"},
+        ]
+        client = FakeLlmClient(response_text="Summary.")
+        compactor = SimpleCompaction(max_preserved_messages=1)
+        result = await compactor.compact(messages, client)
+
+        assert result.compacted_count > 0
+        assert result.summary_turn_n == 2
+        assert result.compacted_turn_range == (1, 2)
+
+        summary_message = result.messages[0]
+        assert summary_message["role"] == "user"
+        assert summary_message["origin"] == "compaction_summary"
+        assert summary_message["turn_n"] == 2
 
 
 class TestSessionCompactionMixin:
@@ -560,7 +617,8 @@ class TestSessionCompactionMixin:
         estimated_before = estimate_text_tokens(all_msgs)
 
         session = _TestSession(all_msgs, estimated_before)
-        await session._maybe_compact_context()
+        async for _ in session._maybe_compact_context():
+            pass
 
         # 压缩后 messages 仍应包含 system message
         assert session.messages[0]["role"] == "system"
@@ -589,7 +647,8 @@ class TestSessionCompactionMixin:
         estimated_before = estimate_text_tokens(all_msgs)
 
         session = _TestSession(all_msgs, estimated_before)
-        await session._maybe_compact_context()
+        async for _ in session._maybe_compact_context():
+            pass
 
         # 压缩后重新估算全部消息的 token
         full_estimate_after = estimate_text_tokens(session.messages)
@@ -597,6 +656,85 @@ class TestSessionCompactionMixin:
         assert session._estimated_token_count >= full_estimate_after - 50
         # 但绝不能小于 system messages 的 token（这是原 bug 的表现）
         assert session._estimated_token_count >= estimate_text_tokens([system_msg])
+
+    @pytest.mark.asyncio
+    async def test_force_compaction_below_threshold(self):
+        """force=True 时跳过阈值检查，强制压缩。"""
+        chat_msgs = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+        ]
+        estimated_before = estimate_text_tokens(chat_msgs)
+        session = _TestSession(chat_msgs, estimated_before)
+        # 默认阈值 0.01 且 max_context_size=10000，这里手动改为高阈值让 force 生效更明显
+        session._spec.config.loop_control.compaction_trigger_ratio = 1.0
+
+        events = []
+        async for event in session._maybe_compact_context(force=True):
+            events.append(event)
+
+        # 应 emit begin + done 两个事件
+        assert len(events) == 2
+        assert events[0].kind == "compaction"
+        assert events[0].phase == "begin"
+        assert events[1].kind == "compaction"
+        assert events[1].phase == "done"
+        assert events[1].tokens_before == estimated_before
+        # 压缩后保留了最近 1 条（max_preserved_messages=1）并加了摘要 user 消息
+        assert len(session.messages) == 2
+
+    @pytest.mark.asyncio
+    async def test_no_force_compaction_below_threshold(self):
+        """force=False 且未达阈值时不压缩，也不 emit compaction 事件。"""
+        chat_msgs = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        estimated_before = estimate_text_tokens(chat_msgs)
+        session = _TestSession(chat_msgs, estimated_before)
+        session._spec.config.loop_control.compaction_trigger_ratio = 1.0
+
+        events = []
+        async for event in session._maybe_compact_context(force=False):
+            events.append(event)
+
+        assert len(events) == 0
+        assert len(session.messages) == len(chat_msgs)
+
+    @pytest.mark.asyncio
+    async def test_compaction_persists_state(self):
+        """压缩后应写 history snapshot 和 context.jsonl 压缩记录。"""
+        chat_msgs = [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1", "turn_n": 1},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2", "turn_n": 2},
+        ]
+        estimated_before = estimate_text_tokens(chat_msgs)
+        session = _TestSession(chat_msgs, estimated_before)
+
+        async for _ in session._maybe_compact_context(force=True):
+            pass
+
+        # history snapshot 应包含压缩后的 user/assistant/tool 消息
+        assert session._history_snapshot is not None
+        snapshot = session._history_snapshot
+        assert any(
+            msg.get("origin") == "compaction_summary" for msg in snapshot
+        )
+        assert any(
+            msg.get("role") == "assistant" and msg.get("turn_n") == 2
+            for msg in snapshot
+        )
+
+        # 应写入一条压缩记录
+        assert len(session._compaction_records) == 1
+        record = session._compaction_records[0]
+        assert record["compacted_count"] > 0
+        assert record["summary_path"]
+        assert record["summary_turn_n"] == 1  # 被压缩段最后一个 assistant turn
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,11 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useState, useEffect } from "react";
 import {
   Panel,
   Group as PanelGroup,
   Separator as PanelResizeHandle,
 } from "react-resizable-panels";
 import { cn } from "@/lib/utils";
-import { FileCode2 } from "lucide-react";
+import { FileCode2, Globe, File, Info } from "lucide-react";
 import {
   renderAssetResourcePreview,
   resolveAssetResourceNodeFromWorkspaceFile,
@@ -16,6 +16,7 @@ import type { PreviewFile } from "@/components/layout/WorkspaceSidebar/preview";
 import type { WorkspaceFile } from "@/types/task";
 import type { PaneTreeNode, PaneLeaf } from "./paneTree";
 import type { WorkspaceRefreshOptions } from "../../hooks/useCodeExecutor/executorTypes";
+import type { TaskWorkspaceSummary } from "../../types";
 
 const LazyMainCanvasPreview = lazy(() =>
   import("./MainCanvasPreview").then((module) => ({
@@ -50,6 +51,12 @@ const LazyDatabaseQueryWorkbench = lazy(() =>
 const LazyCapabilityDetailPanel = lazy(() =>
   import("@/components/CapabilityPanel/CapabilityDetailPanel").then((module) => ({
     default: module.CapabilityDetailPanel,
+  })),
+);
+
+const LazyExecutionResourcesPanel = lazy(() =>
+  import("@/components/execution-resources/ExecutionResourcesPanel").then((module) => ({
+    default: module.ExecutionResourcesPanel,
   })),
 );
 
@@ -90,6 +97,7 @@ export interface PaneRendererProps {
     workspaceFiles: WorkspaceFile[] | undefined;
   };
   currentWorkspaceId: string | undefined;
+  workspaceSummary?: TaskWorkspaceSummary;
   userId?: string;
   tabDirtyMap: Record<string, boolean>;
   onActivateTab: (leafId: string, tabId: string) => void;
@@ -100,7 +108,10 @@ export interface PaneRendererProps {
   onSplitPane: (leafId: string, tabId: string, direction: "horizontal" | "vertical") => void;
   onTabReorder: (leafId: string, fromIndex: number, toIndex: number) => void;
   onNewTerminalTab?: () => void;
+  onOpenRuntimeTab?: () => void;
+  onNewBrowserTab?: (url: string) => void;
   onOpenWorkspaceFileFromCanvas: (fileName: string) => void;
+  onOpenInBrowserTab?: (url: string) => void;
   onOpenPreviewFileFromCanvas: (file: PreviewFile) => void;
   onEditFileInMainCanvas: (file: PreviewFile) => void;
   onTabDirtyChange: (tabId: string, dirty: boolean) => void;
@@ -115,6 +126,7 @@ export function PaneRenderer({
   dropZones,
   executor,
   currentWorkspaceId,
+  workspaceSummary,
   userId,
   tabDirtyMap,
   onActivateTab,
@@ -125,6 +137,9 @@ export function PaneRenderer({
   onSplitPane,
   onTabReorder,
   onNewTerminalTab,
+  onOpenRuntimeTab,
+  onNewBrowserTab,
+  onOpenInBrowserTab,
   onOpenWorkspaceFileFromCanvas,
   onOpenPreviewFileFromCanvas,
   onEditFileInMainCanvas,
@@ -149,6 +164,8 @@ export function PaneRenderer({
             subagentId={tab.subagentId}
             userId={userId}
             sessionId={executor.sessionId}
+            onOpenWorkspaceFile={(file) => onOpenWorkspaceFileFromCanvas(file.name)}
+            onOpenInBrowserTab={onOpenInBrowserTab}
           />
         </Suspense>
       );
@@ -181,6 +198,20 @@ export function PaneRenderer({
           <LazyCapabilityDetailPanel
             workspaceId={tab.capabilityDetail.workspaceId}
             capabilityId={tab.capabilityDetail.capabilityId}
+          />
+        </Suspense>
+      );
+    }
+    if (tab.url) {
+      return <BrowserTabView url={tab.url} readFileContent={executor.readWorkspaceFileContent} />;
+    }
+    if (tab.runtime) {
+      return (
+        <Suspense fallback={<MainSurfaceFallback label="正在加载执行环境..." />}>
+          <LazyExecutionResourcesPanel
+            workspaceId={currentWorkspaceId ?? null}
+            workspaceTitle={workspaceSummary?.title ?? null}
+            workspaceSummary={workspaceSummary ?? null}
           />
         </Suspense>
       );
@@ -350,6 +381,8 @@ export function PaneRenderer({
           }
           onTabDirtyCheck={(tabId) => tabDirtyMap[tabId] ?? false}
           onNewTerminalTab={onNewTerminalTab}
+          onOpenRuntimeTab={onOpenRuntimeTab}
+          onNewBrowserTab={onNewBrowserTab}
         />
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           {leaf.tabs.map((tab) => {
@@ -374,15 +407,15 @@ export function PaneRenderer({
             );
           })}
           {leaf.tabs.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-muted-foreground">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted/30">
-                <FileCode2 className="h-5 w-5 text-muted-foreground/40" />
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-muted-foreground">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-muted/30">
+                <FileCode2 className="h-4 w-4 text-muted-foreground/40" />
               </div>
               <div className="text-center">
-                <div className="text-sm font-medium text-foreground">
+                <div className="text-xs font-medium text-foreground">
                   当前没有打开的对象
                 </div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
+                <div className="mt-0.5 text-[11px] text-muted-foreground/70">
                   从左侧资源树选择文件，或开始一段对话
                 </div>
               </div>
@@ -437,6 +470,87 @@ export function PaneRenderer({
   return (
     <div className="relative flex-1 min-h-0">
       {renderTree(paneTree)}
+    </div>
+  );
+}
+
+function BrowserTabView({ url, readFileContent }: { url: string; readFileContent?: (path: string) => Promise<string | null> }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const isLocal = url && !url.startsWith("http");
+  const isElectron = typeof window !== "undefined" && window.__AIASYS_DESKTOP__?.platform === "electron";
+
+  useEffect(() => {
+    if (!isLocal || !readFileContent) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    readFileContent(url)
+      .then((text) => {
+        if (!cancelled) {
+          setContent(text);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [url, isLocal, readFileContent]);
+
+  const displayPath = isLocal ? "/workspace/" + url : url;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* 地址栏 - Obsidian 风格 */}
+      <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-1.5">
+        {isLocal ? (
+          <File className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate font-mono text-xs text-foreground">
+          {displayPath}
+        </span>
+      </div>
+      {/* Web 版外部链接受限提示 */}
+      {!isLocal && !isElectron ? (
+        <div className="flex items-start gap-2 border-b border-border bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Web 版受浏览器安全策略限制，部分外部网站（如百度、GitHub 等）可能无法显示。
+            如需完整浏览任意网站，请使用桌面版。
+          </span>
+        </div>
+      ) : null}
+      {/* 内容区 */}
+      <div className="flex-1 min-h-0 bg-white">
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            正在加载...
+          </div>
+        ) : isLocal && content ? (
+          <iframe
+            srcDoc={content}
+            sandbox="allow-scripts"
+            className="h-full w-full border-0"
+            title={url}
+          />
+        ) : !isLocal ? (
+          <iframe
+            src={url}
+            sandbox="allow-scripts"
+            className="h-full w-full border-0"
+            title={url}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+            无法加载文件内容
+          </div>
+        )}
+      </div>
     </div>
   );
 }
