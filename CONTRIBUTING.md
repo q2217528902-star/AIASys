@@ -68,6 +68,8 @@ type(scope): 简短说明
 
 **每个 commit 只做一个逻辑单元。** 不要把前端 UI、后端 API、bugfix、文档、截图混在一个 commit 里。
 
+> PR 可以包含多个 commit，只要每个 commit 都是一个可独立理解的逻辑单元；不要为了凑单 commit 而强行 squash。
+
 **不好的示例（不要这样做）：**
 
 ```text
@@ -234,10 +236,17 @@ AIASys/
 ## 7. 相关规范索引
 
 - 仓库权威规范：`AGENTS.md`（同时存在于 `.kimi-code/AGENTS.md` 供 Kimi Code 读取）
-- Git 工作流 Skill：`.team-skills/aiasys-git-workflow/SKILL.md`
+- 团队共享 Skill 池：`.team-skills/`
+  - Git 工作流：`.team-skills/aiasys-git-workflow/SKILL.md`
+  - PR 提交前检查：`.team-skills/pr-check/SKILL.md`
+  - 团队 Skill 治理：`.team-skills/team-skill-governance/SKILL.md`
+  - Skill 路由总览：`.team-skills/team-skill-guide/SKILL.md`
+  - 前端架构：`.team-skills/aiasys-frontend-architecture/SKILL.md`
+  - 系统设计：`.team-skills/aiasys-system-design/SKILL.md`
+  - 工具开发：`.team-skills/aiasys-tool-dev/SKILL.md`
+  - Commit 历史审计：`.team-skills/commit-history-audit/SKILL.md`
 - 维护者发版流程：`docs/guides/maintainers/RELEASE_PROCESS.md`
 - Changelog 编写规范：`docs/changelog/README.md`
-- PR 提交前检查：`.team-skills/pr-check/SKILL.md`
 
 ## 8. 获取帮助
 
