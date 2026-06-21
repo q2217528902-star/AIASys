@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -25,6 +26,21 @@ def _build_user() -> UserInfo:
 
 def _build_service(tmp_path: Path) -> WorkspaceRegistryService:
     return WorkspaceRegistryService(tmp_path, session_manager=SessionManager(tmp_path))
+
+
+async def _wait_for_workspace_initialization(
+    service: WorkspaceRegistryService,
+    workspace_id: str,
+    user_id: str = "local_default",
+    timeout: float = 30.0,
+) -> dict:
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        status = service._read_initialization_status(user_id, workspace_id)
+        if status.get("status") in ("completed", "failed"):
+            return status
+        await asyncio.sleep(0.1)
+    raise TimeoutError(f"工作区 {workspace_id} 初始化超时")
 
 
 def test_workspace_registry_generates_short_workspace_id(tmp_path: Path) -> None:
@@ -587,6 +603,10 @@ async def test_workspace_route_creates_workspace_with_explicit_execution_policy_
     assert created.execution_policy.mode == ExecutionPolicyMode.AUTO_EXPLORE
     assert created.runtime_binding.sandbox_mode == "local"
     assert created.runtime_binding.env_id == "workspace-default"
+
+    init_status = await _wait_for_workspace_initialization(service, "task-auto-explore")
+    assert init_status["status"] == "completed"
+
     registry_path = tmp_path / "local_default" / "task-auto-explore" / ".env" / "environments.json"
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     assert registry["active_env_id"] == "workspace-default"

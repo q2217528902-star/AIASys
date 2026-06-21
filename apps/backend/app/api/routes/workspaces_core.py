@@ -45,6 +45,7 @@ from app.models.workspace import (
     UpdateWorkspaceRequest,
     WorkspaceConversationSummary,
     WorkspaceDetailResponse,
+    WorkspaceInitializationStatus,
     WorkspaceListResponse,
     WorkspaceOverviewResponse,
     WorkspaceResourceLayerSummaryResponse,
@@ -721,6 +722,26 @@ async def get_workspace(
             workspace_id,
             include_conversations=True,
         )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Operation failed") from exc
+
+
+@router.get(
+    "/{workspace_id}/initialization",
+    response_model=WorkspaceInitializationStatus,
+)
+async def get_workspace_initialization(
+    workspace_id: str,
+    current_user: UserInfo = Depends(require_auth()),
+):
+    """查询工作区运行时资源初始化状态与进度。"""
+    service = get_workspace_registry_service()
+    try:
+        raw = service._read_initialization_status(
+            current_user.user_id,
+            workspace_id,
+        )
+        return WorkspaceInitializationStatus(**raw)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Operation failed") from exc
 

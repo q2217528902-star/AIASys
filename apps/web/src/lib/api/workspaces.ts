@@ -121,6 +121,15 @@ export interface FolderImportProgressEvent {
   warnings?: string[];
 }
 
+export interface WorkspaceInitializationStatus {
+  status: "pending" | "running" | "completed" | "failed";
+  progress: number;
+  message: string;
+  started_at?: string;
+  completed_at?: string;
+  error?: string;
+}
+
 export interface CreateConversationPayload {
   conversationId?: string;
   title?: string;
@@ -448,6 +457,18 @@ export async function getTaskWorkspace(
     },
   );
   return normalizeWorkspaceSummary(response);
+}
+
+export async function getWorkspaceInitialization(
+  workspaceId: string,
+): Promise<WorkspaceInitializationStatus> {
+  return apiRequest<WorkspaceInitializationStatus>(
+    API_ENDPOINTS.WORKSPACE_INITIALIZATION(workspaceId),
+    {
+      cache: "no-store",
+      timeoutMs: 10000,
+    },
+  );
 }
 
 export async function getWorkspaceOverview(

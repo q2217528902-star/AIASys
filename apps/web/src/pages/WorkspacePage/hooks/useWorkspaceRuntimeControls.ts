@@ -6,6 +6,7 @@ import { listKernelEnvs, type KernelEnvItem } from "@/lib/api/kernelEnvs";
 import {
   createImportFolderStream,
   createTaskWorkspace,
+  getWorkspaceInitialization,
   getWorkspaceRuntimeEnvironments,
   registerWorkspacePythonEnvironment,
 } from "@/lib/api/workspaces";
@@ -39,6 +40,7 @@ export function useWorkspaceRuntimeControls({
     null,
   );
   const [importProgress, setImportProgress] = useState<number>(0);
+  const [newWorkspaceMessage, setNewWorkspaceMessage] = useState<string | undefined>(undefined);
   const [isRestartingRuntime, setIsRestartingRuntime] = useState(false);
   const [boundWorkspaceEnv, setBoundWorkspaceEnv] =
     useState<WorkspaceRuntimeEnvironment | null>(null);
@@ -124,8 +126,8 @@ export function useWorkspaceRuntimeControls({
     newWorkspaceStage !== "idle" && newWorkspaceStage !== "error";
   const isInitializingEnvironment = isCreatingWorkspace;
   const newWorkspaceLifecycleState = useMemo(
-    () => buildNewTaskLifecycleState(newWorkspaceStage, newWorkspaceError, importProgress),
-    [newWorkspaceError, newWorkspaceStage, importProgress],
+    () => buildNewTaskLifecycleState(newWorkspaceStage, newWorkspaceError, importProgress, newWorkspaceMessage),
+    [newWorkspaceError, newWorkspaceStage, importProgress, newWorkspaceMessage],
   );
 
   const closeNewWorkspaceDialog = useCallback(() => {
@@ -136,12 +138,14 @@ export function useWorkspaceRuntimeControls({
     setNewWorkspaceStage("idle");
     setNewWorkspaceError(null);
     setImportProgress(0);
+    setNewWorkspaceMessage(undefined);
   }, [isCreatingWorkspace]);
 
   const openNewWorkspaceDialog = useCallback(() => {
     setNewWorkspaceError(null);
     setNewWorkspaceStage("idle");
     setImportProgress(0);
+    setNewWorkspaceMessage(undefined);
     setShowNewWorkspaceDialog(true);
   }, []);
 
@@ -337,6 +341,33 @@ export function useWorkspaceRuntimeControls({
             activate: true,
           });
         }
+
+        const needsRuntimeInit =
+          !resources.dockerEnabled &&
+          resources.pythonSource?.kind !== "registered" &&
+          (resources.pythonEnabled || resources.nodeEnabled);
+        if (needsRuntimeInit) {
+          setNewWorkspaceStage("waiting_runtime");
+          let status = await getWorkspaceInitialization(
+            createdWorkspace.workspace_id,
+          );
+          setImportProgress(status.progress);
+          setNewWorkspaceMessage(status.message);
+          while (status.status === "pending" || status.status === "running") {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            status = await getWorkspaceInitialization(
+              createdWorkspace.workspace_id,
+            );
+            setImportProgress(status.progress);
+            setNewWorkspaceMessage(status.message);
+          }
+          if (status.status === "failed") {
+            throw new Error(
+              status.error || status.message || "运行环境初始化失败",
+            );
+          }
+        }
+
         emitWorkspaceListRefreshEvent();
 
         await activatePreparedSession(preparedSessionId);
@@ -345,6 +376,7 @@ export function useWorkspaceRuntimeControls({
         setShowNewWorkspaceDialog(false);
         setNewWorkspaceStage("idle");
         setImportProgress(0);
+        setNewWorkspaceMessage(undefined);
         showSuccess(
           resources.dockerEnabled
             ? "已创建新工作区并启用 Docker 沙盒"
