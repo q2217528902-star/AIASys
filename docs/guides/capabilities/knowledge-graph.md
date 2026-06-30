@@ -2,6 +2,8 @@
 
 知识图谱是 AIASys 内置的实体关系管理系统，基于 Property Graph 模型，每张图谱是一个独立的 SQLite 数据库文件（`.graph.db`）。
 
+![知识图谱实体关系探索](../../../images/readme/demo-knowledge-graph-exploration.png)
+
 ## 基本概念
 
 知识图谱采用 Property Graph 模型，核心元素：
@@ -23,6 +25,8 @@
 - **社区着色**：不同社区用不同颜色标记，视觉上一目了然
 
 支持缩放、拖拽、点击查看详情等交互操作。
+
+![知识库问答总览](../../../images/readme/demo-008-knowledge-base-qa-overview.png)
 
 ## 实体搜索
 
@@ -110,3 +114,5 @@ Agent 可以通过系统工具直接操作图谱：
 - **项目依赖管理**：构建项目、模块、依赖库之间的关系图，理清架构
 - **知识分类**：将领域知识中的概念和术语组织成图谱，辅助学习和检索
 - **人物关系梳理**：从文档中提取人物和组织，构建关系网络
+
+![AIASys 工作区运行闭环](../../../images/readme/aiasys-workspace-loop.png)

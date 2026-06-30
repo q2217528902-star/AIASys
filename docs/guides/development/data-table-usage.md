@@ -2,6 +2,8 @@
 
 多维表格是类似 Notion Database 的结构化数据管理工具。每张表格是一个独立的 SQLite 数据库文件（`.table.db`），存储在工作区目录下。
 
+![多维表格实验记录](../../../images/readme/demo-data-table.png)
+
 ## 基本概念
 
 多维表格的核心设计：
@@ -88,6 +90,8 @@ Agent 可以通过系统内置工具直接操作多维表格：
 - **管理列**：Agent 可以添加和删除列
 
 Agent 操作表格时，表格文件被当作普通数据源处理，不依赖额外的 API 层。
+
+![销售洞察演示工作区总览](../../../images/readme/demo-sales-overview.png)
 
 ## 文件格式
 

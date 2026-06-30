@@ -1,5 +1,7 @@
 # 全局工作区
 
+![全局工作区资源面板](../../../images/readme/panel-global-workspace.png)
+
 ## 概念
 
 全局工作区是跨工作区共享的资源空间。每个用户有一个全局工作区，路径为 `workspaces/{user_id}/global_workspace/`。放在全局工作区里的文件在所有普通工作区里都能访问到，不需要复制，不需要手动挂载。
@@ -58,3 +60,5 @@
 ## 文件树中的展示
 
 在普通工作区的文件树中，全局工作区的文件与当前工作区的文件在同一棵树中显示，但通过不同的图标或分组标识区分来源。Agent 文件工具通过 `/global/` 前缀访问全局工作区内容，通过 `/workspace/` 前缀访问当前工作区内容。
+
+![AIASys 工作区三栏布局](../../../images/readme/workspace-layout.png)

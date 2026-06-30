@@ -1,8 +1,10 @@
 # 协作专家
 
-> 当前版本: v0.3.9
+> 当前版本: v0.4.27
 
 本文档说明协作专家（Expert Roles）的概念、配置和使用方式。
+
+![专家协作节点面板](../../../images/readme/panel-subagents.png)
 
 ## 什么是协作专家
 
@@ -19,6 +21,8 @@
 | coder（代码专家） | 主控明确的任务指派范围内的代码实现与调试 | 需要修改普通文件、调试错误、运行构建或测试时 |
 | researcher（研究员） | 调研与分析 | 需要搜索资料、阅读论文、整理调研报告时 |
 | reviewer（审查员） | 代码与方案审查 | 需要审查代码质量、检查方案合理性时 |
+
+![能力管理面板](../../../images/readme/panel-capability-management.png)
 
 ## 两级启用
 
@@ -72,6 +76,8 @@
 - 对话历史：该子 Agent 的完整执行过程
 - 工具调用记录：每个工具调用的输入参数和返回结果
 - 产出文件：该子 Agent 在工作区中生成的文件列表
+
+![子 Agent 并行协作](../../../images/readme/demo-005-subagent-collaboration-overview.png)
 
 ## 子 Agent 上下文隔离
 

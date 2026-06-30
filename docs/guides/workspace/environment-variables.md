@@ -2,6 +2,8 @@
 
 环境变量用于管理 API 密钥、连接字符串、代理设置等敏感配置，Agent 在执行代码和 shell 命令时会自动注入，不需要手动 export。
 
+![环境变量注入与验证](../../../images/readme/demo-env-vars-overview.png)
+
 ## 两级注入
 
 环境变量分两级管理：

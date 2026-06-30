@@ -2,6 +2,8 @@
 
 Claw 是工作区和会话的外部通信通道。它让 AIASys 可以通过微信等 IM 平台接收任务和发送通知。
 
+![频道接入面板](../../../images/readme/channel%20management.png)
+
 ## Claw 的定位
 
 Claw 不是独立工作区。它复用当前工作区的 Soul、项目档案、工作区记忆和会话上下文，只是在原有的 Web/桌面交互方式之外增加了一条 IM 通道。Agent 工具目录中不提供 Claw 专属工具，这是设计决策。

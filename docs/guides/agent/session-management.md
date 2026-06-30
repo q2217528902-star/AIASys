@@ -2,6 +2,8 @@
 
 会话是工作区内的一条任务推进线。每个会话有独立的对话历史、执行日志和上下文。本文档覆盖会话的高级管理功能。
 
+![AIASys 工作区三栏布局](../../../images/readme/workspace-layout.png)
+
 ## 会话 Fork
 
 从对话历史的任意节点创建新会话。新会话继承分叉点之前的完整历史，之后两条会话各自独立推进。
@@ -28,6 +30,8 @@ Bundle 文件可以在其他 AIASys 实例中导入恢复。
 会话的 token 预算记录在会话元数据中，限制该会话的累计 token 消耗。预算适用于普通对话和 AutoTask，消耗达到上限后 Agent 执行被阻塞。
 
 预算设置入口在对话栏顶部的 TokenUsageBar 中。修改预算不影响已消耗的 token 统计，只改变上限值。
+
+![上下文预算窗口](../../../images/readme/context%20window.png)
 
 ## Checkpoint
 

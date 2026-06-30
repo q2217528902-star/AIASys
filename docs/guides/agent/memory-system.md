@@ -2,6 +2,8 @@
 
 Memory 系统让 Agent 在跨会话的场景中记住用户偏好、任务上下文和长期规则。设计对标纯文本 Markdown 方案，不维护结构化 entry 对象。
 
+![AIASys 工作区运行闭环](../../../images/readme/aiasys-workspace-loop.png)
+
 ## 四层架构
 
 ### L0：活跃上下文
@@ -32,6 +34,8 @@ Memory 系统让 Agent 在跨会话的场景中记住用户偏好、任务上下
 ## Memory 面板
 
 侧边栏中的 Memory 面板可以预览和管理 memory 条目。面板展示当前工作区和全局工作区的 memory 内容，支持按作用域筛选。
+
+![全局工作区资源面板](../../../images/readme/panel-global-workspace.png)
 
 ## 注入时机
 

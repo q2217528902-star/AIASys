@@ -2,6 +2,8 @@
 
 执行资源管理当前工作区的 Python 运行环境，支撑 Notebook 和代码执行。
 
+![Notebook 代码执行与图表预览](../../../images/readme/demo-003-notebook-analysis-overview.png)
+
 ## 概念
 
 工作区可以绑定一个或多个 Python 环境。这些环境是 Notebook 和代码执行的基础设施，Notebook 的内核选择器会列出所有已绑定的环境，随时可以切换。
@@ -40,6 +42,8 @@
 - Docker 活跃数：运行中的容器数量
 - 工作区变量数：当前工作区绑定的环境变量数量
 - 已注册环境数：所有已注册的 Python 环境总数
+
+![环境变量注入与验证](../../../images/readme/demo-env-vars-overview.png)
 
 ## 注册 UV 环境
 

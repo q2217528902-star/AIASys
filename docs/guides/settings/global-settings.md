@@ -2,6 +2,8 @@
 
 全局控制面板用于管理跨工作区的系统级配置，包括模型连接、环境变量、存储位置、能力市场、自动化任务和模板中心等。
 
+![能力管理面板](../../../images/readme/panel-capability-management.png)
+
 ## 打开方式
 
 可以通过以下入口打开全局控制面板：
@@ -43,6 +45,10 @@
 | **模板市场** | 浏览和安装系统内置工作区模板。 |
 | **模板管理** | 浏览和管理已安装的工作区模板。 |
 | **Token 消耗** | 查看跨会话的 LLM Token 消耗趋势与热力图。 |
+
+![模型配置弹窗](../../../images/readme/demo-model-config-panel.png)
+
+![环境变量注入与验证](../../../images/readme/demo-env-vars-overview.png)
 
 ## 保存方式
 

@@ -1,5 +1,7 @@
 # AIASys 常见问题
 
+![AIASys 工作区三栏布局](../../../images/readme/workspace-layout.png)
+
 ## 启动与运行
 
 ### Q: `./dev.sh` 启动后页面打不开？
@@ -63,6 +65,8 @@ AIASYS_FRONTEND_PORT=13002 AIASYS_BACKEND_PORT=13003 ./dev.sh
 
 ## 模型配置
 
+![模型配置弹窗](../../../images/readme/demo-model-config-panel.png)
+
 ### Q: 在界面上配置了模型，为什么对话还是发不出去？
 
 检查三件事：
@@ -123,6 +127,8 @@ rm -rf apps/backend/data/
 ---
 
 ## 工作区与会话
+
+![全局工作区资源面板](../../../images/readme/panel-global-workspace.png)
 
 ### Q: 全局工作区和普通工作区有什么区别？
 

@@ -1,8 +1,10 @@
 # Agent 配置
 
-> 当前版本: v0.3.9
+> 当前版本: v0.4.27
 
 本文档说明 Agent 的三层配置体系：Soul（用户默认）、项目画像（工作区）、会话覆盖（会话）。
+
+![模型配置弹窗](../../../images/readme/demo-model-config-panel.png)
 
 ## 三层配置概述
 
@@ -57,6 +59,8 @@ Soul 配置存储在用户默认全局工作区中，所有工作区共享。
 - **会话覆盖**：编辑当前会话配置
 
 每个区域提供文本输入框，支持 Markdown 格式。修改后即时保存。
+
+![能力管理面板](../../../images/readme/panel-capability-management.png)
 
 ## Agent 如何读取配置
 

@@ -2,6 +2,8 @@
 
 能力注册表是系统中所有能力的统一管理层，负责能力的发现、安装、启用和验证。
 
+![能力管理面板](../../../images/readme/panel-capability-management.png)
+
 ## 概念
 
 注册表把 Skill 技能、MCP 连接器和协作专家三类能力放在同一个管理框架下，提供一致的操作体验。不管是安装一个 PDF 翻译 Skill，还是接入一个浏览器操控 MCP Server，操作路径和状态语义都一样。
@@ -41,6 +43,8 @@
 
 从内置源（`apps/backend/skills/builtin/`）和用户源（`apps/backend/skills/store/`）列出所有可安装的能力。支持按名称、类型和标签搜索过滤。
 
+![外部技能市场](../../../images/readme/panel-skill-management-2.png)
+
 ### 安装
 
 选择能力后指定目标作用域（工作区或全局），系统将能力从源仓库复制到目标位置。安装过程生成 `.aiasys-skill-meta.json` 元数据文件，记录来源和版本指纹。
@@ -68,3 +72,5 @@
 ## 与各能力面板的关系
 
 注册表是统一的底层管理层。MCP 管理面板、Skill 市场面板和专家协作面板是注册表在不同能力类型上的视图。所有安装、卸载、启用、禁用的操作最终都走注册表的统一逻辑，各面板只是展示和交互层面的差异。
+
+![已安装技能管理](../../../images/readme/panel-skill-management.png)

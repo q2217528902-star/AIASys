@@ -2,6 +2,8 @@
 
 本目录按主题分组，方便按需查阅。
 
+![AIASys 工作区三栏布局](../../images/readme/workspace-layout.png)
+
 ## 分组索引
 
 ### 快速入门

@@ -2,6 +2,8 @@
 
 Canvas 是 AIASys 内置的可视化画布编辑器，基于 JSON Canvas 标准格式，支持无限画布上的节点与连线编辑。
 
+![Canvas 工作流画布演示](../../../images/readme/demo-canvas-workflow.png)
+
 ## JSON Canvas 格式
 
 画布文件使用 `.canvas` 扩展名，内部遵循 [JSON Canvas](https://jsoncanvas.org/) 开放标准。每个 `.canvas` 文件是一个 JSON 文档，包含 `nodes` 数组和 `edges` 数组。这个标准格式让画布文件可以被其他兼容工具打开，不锁定在 AIASys 内。
@@ -107,6 +109,8 @@ Agent 可以通过系统内置的文件工具直接读写 `.canvas` 文件。具
 - **批量操作**：Agent 可以一次性添加多个节点和连线，适合自动生成思维导图、大纲等结构化内容
 
 此外，系统内置了 Canvas Skill（`aiasys-canvas-skill`），提供画布脚本编辑和 JSON Canvas 格式校验能力。Agent 在需要批量修改画布或校验画布格式时，可以加载此 Skill。
+
+![能力管理面板](../../../images/readme/panel-capability-management.png)
 
 ## 使用场景
 

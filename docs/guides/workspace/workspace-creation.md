@@ -2,9 +2,13 @@
 
 工作区是 AIASys 的一等对象。每个工作区有独立的文件系统、运行环境、会话记录和资源配置。
 
+![AIASys 工作区三栏布局](../../../images/readme/workspace-layout.png)
+
 ## 创建工作区
 
 进入 `/workspace` 页面，点击页面中间或左侧边栏的"新建工作区"按钮，弹出创建面板。
+
+![基于内置模板新建工作区](../../../images/readme/add_new_workspace.png)
 
 创建面板包含以下字段：
 
@@ -25,6 +29,8 @@
 | 数据分析 | 预置数据分析常用目录结构和 Pandas/Matplotlib 依赖 |
 | 文献综述 | 预置论文管理目录、文献检索 skill 和知识库配置 |
 | 项目开发 | 预置 src/tests/docs 目录结构和 Git 初始化 |
+
+![把当前工作区保存为自定义模板](../../../images/readme/save_as_self-defined_template.png)
 
 ### Python 环境选项
 
@@ -66,6 +72,8 @@
 
 切换后中间画布和右侧会话侧栏会刷新为对应工作区的内容。
 
+![当前工作区文件面板](../../../images/readme/panel-current-workspace.png)
+
 ## 工作区设置
 
 点击左侧边栏底部的齿轮图标进入工作区设置。设置面板包含以下分组：
@@ -95,6 +103,8 @@
 - 将外部目录挂载到工作区文件系统
 - 支持只读和读写两种模式
 - 挂载的目录在工作区文件树中显示为独立节点
+
+![全局工作区资源面板](../../../images/readme/panel-global-workspace.png)
 
 ## 删除工作区
 

@@ -83,6 +83,6 @@ AIASys 使用多种 AI 编码助手（Kimi Code、Claude Code、Codex CLI、Gemi
 
 ## 相关链接
 
-- [`.gitignore`](../../.gitignore) — 完整的忽略规则
+- [`.gitignore`](../../../.gitignore) — 完整的忽略规则
 - [CONTRIBUTING.md](../../../CONTRIBUTING.md) — 贡献指南
-- [`.agents/skills/`](../../.agents/skills/) — 项目共享 Skill
+- `.agents/skills/` — 项目共享 Skill 目录（如当前 checkout 中存在）

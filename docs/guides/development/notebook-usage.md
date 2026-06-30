@@ -2,6 +2,8 @@
 
 AIASys 内置 Jupyter Notebook 支持，可以直接在工作区中打开、编辑和运行 `.ipynb` 文件。
 
+![Notebook 代码执行与图表预览](../../../images/readme/demo-003-notebook-analysis-overview.png)
+
 ## 打开 Notebook
 
 在文件树中找到 `.ipynb` 文件，双击或右键选择"打开"，主画布会加载 Notebook 编辑器。
@@ -123,3 +125,5 @@ Agent 可以直接操作 Notebook：
 - 添加/删除单元格：Agent 可以在指定位置插入或删除单元格
 
 在对话侧栏中，当 Agent 引用了 Notebook 中的代码或输出时，点击引用链接会跳转到对应的单元格。Agent 执行 Notebook 操作的完整记录会保留在会话历史中。
+
+![销售洞察图表预览](../../../images/readme/demo-sales-chart.png)

@@ -2,6 +2,8 @@
 
 工作区内的所有文件和资源通过左侧 Activity Bar 的文件树进行管理。
 
+![当前工作区文件面板](../../../images/readme/panel-current-workspace.png)
+
 ## 文件树
 
 点击左侧 Activity Bar 的"当前工作区"图标打开文件树面板。
@@ -73,6 +75,8 @@
 
 重目录不参与文件搜索和批量操作，减少误操作风险。
 
+![文件搜索面板](../../../images/readme/panel-file-search.png)
+
 ## 文件上传
 
 支持以下方式上传文件到当前工作区：
@@ -120,6 +124,8 @@ CSS、HTML、JavaScript、JSON、Markdown、Python、SQL、XML、YAML
 ## 文件历史
 
 右键文件选择"文件历史"打开版本历史面板。
+
+![文件变更历史面板](../../../images/readme/panel-file-changes.png)
 
 ### 版本列表
 

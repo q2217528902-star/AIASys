@@ -2,6 +2,8 @@
 
 工作区的文件树可以通过 `.aiasys/file-tree-config.json` 配置文件定制。该文件在创建工作区时自动生成，包含以下字段：
 
+![当前工作区文件面板](../../../images/readme/panel-current-workspace.png)
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `hidden_patterns` | `string[]` | 文件树中隐藏的文件/目录匹配规则，支持 glob 通配符 |
@@ -80,3 +82,5 @@
 ```
 
 修改配置后，刷新文件树即可看到效果。删除该文件后，系统使用内置默认值运行，不会报错。
+
+![文件搜索面板](../../../images/readme/panel-file-search.png)

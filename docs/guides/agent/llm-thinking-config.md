@@ -4,6 +4,8 @@
 
 AIASys 支持为支持 reasoning（深度思考）的模型配置思考深度和 reasoning 内容解析方式。当前已验证支持：
 
+![模型配置弹窗](../../../images/readme/demo-model-config-panel.png)
+
 - **阶跃星辰（StepFun）**：step-3.5-flash-2603
 - **DeepSeek**：deepseek-chat、deepseek-reasoner 等
 - **Kimi**：kimi-for-coding、kimi-k2 系列
